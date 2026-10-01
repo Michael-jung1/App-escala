@@ -412,4 +412,40 @@ class SecurityAndValidationTest {
         assertEquals(1, resultComAvisos.avisosConflito.size)
         assertEquals("Carlos já está escalado em Recepção no dia Domingo 04 (Matriz)", resultComAvisos.avisosConflito.first())
     }
+
+    @Test
+    fun testFallbackFuturoNaoRetornaEscalaPassada() {
+        val today = LocalDate.of(2026, 10, 1)
+        val targetDate = LocalDate.of(2026, 9, 2)
+
+        val dutyPassado1 = com.aistudio.escala.data.EscalacaoPessoa(
+            escalacaoId = 1L,
+            igreja = "Matriz",
+            funcao = "Recepção",
+            data = "Quarta 02",
+            periodo = "Setembro de 2026",
+            dataReal = "2026-09-02",
+            localDate = LocalDate.of(2026, 9, 2)
+        )
+
+        val dutyPassado2 = com.aistudio.escala.data.EscalacaoPessoa(
+            escalacaoId = 2L,
+            igreja = "Matriz",
+            funcao = "Recepção",
+            data = "Quarta 16",
+            periodo = "Setembro de 2026",
+            dataReal = "2026-09-16",
+            localDate = LocalDate.of(2026, 9, 16)
+        )
+
+        val userDuties = listOf(dutyPassado1, dutyPassado2)
+
+        val futureDuty = userDuties.filter { duty ->
+            duty.localDate != null && (duty.localDate >= today)
+        }.minByOrNull { it.localDate!! } ?: userDuties.filter { duty ->
+            duty.localDate != null && (targetDate == null || duty.localDate > targetDate) && (duty.localDate >= today)
+        }.minByOrNull { it.localDate!! }
+
+        assertNull("Quando só existem escalas passadas, o fallback deve retornar null", futureDuty)
+    }
 }

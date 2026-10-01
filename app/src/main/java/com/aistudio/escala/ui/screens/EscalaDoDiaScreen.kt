@@ -94,7 +94,7 @@ fun EscalaDoDiaScreen(
 ) {
     val coroutineScope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
-    val today = remember { LocalDate.now() }
+    val today = LocalDate.now()
 
     val activeUser = userFilter.ifBlank { preferencesManager.nomeUsuario ?: "" }.trim()
     var searchInput by remember { mutableStateOf(activeUser) }
@@ -160,11 +160,12 @@ fun EscalaDoDiaScreen(
                 val userServesHere = duties.any { SearchUtils.correspondeBusca(it.pessoa, activeUser) }
                 if (!userServesHere) {
                     val userDuties = repository.getEscalaPessoa(activeUser, apenasFuturas = false)
+                    val currentDate = LocalDate.now()
                     val futureDuty = userDuties.filter { duty ->
-                        duty.localDate != null && (duty.localDate >= today)
+                        duty.localDate != null && (duty.localDate >= currentDate)
                     }.minByOrNull { it.localDate!! } ?: userDuties.filter { duty ->
-                        duty.localDate != null && (targetDate == null || duty.localDate > targetDate)
-                    }.minByOrNull { it.localDate!! } ?: userDuties.firstOrNull()
+                        duty.localDate != null && (targetDate == null || duty.localDate > targetDate) && (duty.localDate >= currentDate)
+                    }.minByOrNull { it.localDate!! }
 
                     if (futureDuty != null && futureDuty.data.isNotBlank()) {
                         fallbackDateServico = futureDuty.data
