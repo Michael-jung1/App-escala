@@ -78,6 +78,7 @@ import com.aistudio.escala.util.SearchUtils
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+import java.time.YearMonth
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -243,10 +244,15 @@ fun EscalaDoDiaScreen(
             serviceDatesSet = allLocalDates
         }
 
-        val initialDateObj = selectedLocalDate ?: dates.firstOrNull { it.localDate != null }?.localDate ?: LocalDate.of(2026, 9, 6)
+        val allDatesList = dates.mapNotNull { it.localDate }
+        val relevantFallback = allDatesList.filter { it >= today }.minOrNull()
+            ?: allDatesList.maxOrNull()
+            ?: today
+
+        val initialDateObj = selectedLocalDate ?: relevantFallback
         selectedLocalDate = initialDateObj
         val match = dates.firstOrNull { it.localDate == initialDateObj }
-        val dateServico = match?.dataServico ?: "Domingo 06"
+        val dateServico = match?.dataServico ?: DateUtils.formatarDataExtenso(initialDateObj)
         selectedDateServico = dateServico
         loadScheduleForDate(dateServico, initialDateObj)
     }
@@ -366,9 +372,42 @@ fun EscalaDoDiaScreen(
 
         // Monthly Interactive Calendar (Rule 1 & Rule 2 applied)
         item {
+            val calendarInitialYearMonth = remember(availableDates, selectedLocalDate) {
+                selectedLocalDate?.let { YearMonth.from(it) }
+                    ?: availableDates.mapNotNull { it.localDate }.filter { it >= today }.minOrNull()?.let { YearMonth.from(it) }
+                    ?: availableDates.mapNotNull { it.localDate }.maxOrNull()?.let { YearMonth.from(it) }
+                    ?: YearMonth.now()
+            }
+
             CalendarioMensal(
                 serviceDates = serviceDatesSet,
                 selectedDate = selectedLocalDate,
+                initialYearMonth = calendarInitialYearMonth,
+                onMonthChanged = { newYearMonth ->
+                    if (selectedLocalDate == null || YearMonth.from(selectedLocalDate) != newYearMonth) {
+                        val datesInMonth = availableDates.filter { it.localDate != null && YearMonth.from(it.localDate) == newYearMonth }
+                        val userDatesInMonth = userSpecificDates?.filter { YearMonth.from(it) == newYearMonth }
+
+                        val targetDate = if (datesInMonth.isNotEmpty()) {
+                            val bestUserDate = if (!userDatesInMonth.isNullOrEmpty()) {
+                                userDatesInMonth.filter { it >= today }.minOrNull() ?: userDatesInMonth.minOrNull()
+                            } else null
+
+                            bestUserDate
+                                ?: datesInMonth.mapNotNull { it.localDate }.filter { it >= today }.minOrNull()
+                                ?: datesInMonth.mapNotNull { it.localDate }.minOrNull()
+                                ?: datesInMonth.first().localDate!!
+                        } else {
+                            if (YearMonth.from(today) == newYearMonth) today else newYearMonth.atDay(1)
+                        }
+
+                        selectedLocalDate = targetDate
+                        val match = availableDates.firstOrNull { it.localDate == targetDate }
+                        val ds = match?.dataServico ?: DateUtils.formatarDataExtenso(targetDate)
+                        selectedDateServico = ds
+                        loadScheduleForDate(ds, targetDate)
+                    }
+                },
                 onSelectDate = { pickedDate ->
                     selectedLocalDate = pickedDate
                     val match = availableDates.firstOrNull { it.localDate == pickedDate }

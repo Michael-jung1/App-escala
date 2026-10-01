@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,10 +39,12 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import com.aistudio.escala.ui.components.pressScale
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -74,7 +77,6 @@ import com.aistudio.escala.ui.theme.getSuccessColor
 import com.aistudio.escala.util.DateUtils
 import com.aistudio.escala.util.PreferencesManager
 import com.aistudio.escala.util.SearchUtils
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
@@ -105,8 +107,6 @@ fun MinhaEscalaScreen(
     var searchInput by remember { mutableStateOf(initialName) }
     var currentSearchedName by remember { mutableStateOf(initialName) }
     var allPeople by remember { mutableStateOf<List<String>>(emptyList()) }
-    var suggestions by remember { mutableStateOf<List<String>>(emptyList()) }
-    var isSuggestionsOpen by remember { mutableStateOf(false) }
 
     var results by remember { mutableStateOf<List<EscalacaoPessoa>?>(null) }
     var isLoading by remember { mutableStateOf(false) }
@@ -160,7 +160,6 @@ fun MinhaEscalaScreen(
         val cleanName = nameToSearch.trim()
         if (cleanName.isEmpty()) return
         focusManager.clearFocus()
-        isSuggestionsOpen = false
         isLoading = true
         errorMessage = null
         results = null
@@ -175,6 +174,7 @@ fun MinhaEscalaScreen(
             } else {
                 results = escalacoes
                 currentSearchedName = resolvedName
+                searchInput = resolvedName
                 preferencesManager.nomeUsuario = resolvedName
                 onUserFilterChanged(resolvedName)
             }
@@ -182,24 +182,9 @@ fun MinhaEscalaScreen(
         }
     }
 
-    // Debounced search on input change: as the user types, wait 300ms then auto-update results smoothly
+    // Limpeza automática de resultados ao apagar todo o texto do campo (desfazendo a busca anterior)
     LaunchedEffect(searchInput) {
-        val query = searchInput.trim()
-        if (query.length >= 2) {
-            delay(300L)
-            // If already searching or matches current active user, avoid duplicate fetch
-            if (query != currentSearchedName) {
-                val resolvedName = SearchUtils.encontrarMelhorPessoa(allPeople, query) ?: query
-                val escalacoes = repository.getEscalaPessoa(resolvedName, apenasFuturas = false)
-                if (escalacoes.isNotEmpty()) {
-                    results = escalacoes
-                    currentSearchedName = resolvedName
-                    preferencesManager.nomeUsuario = resolvedName
-                    onUserFilterChanged(resolvedName)
-                    errorMessage = null
-                }
-            }
-        } else if (query.isEmpty() && currentSearchedName.isNotEmpty()) {
+        if (searchInput.trim().isEmpty() && currentSearchedName.isNotEmpty()) {
             currentSearchedName = ""
             results = null
             errorMessage = null
@@ -248,6 +233,7 @@ fun MinhaEscalaScreen(
                 allPeople = allPeople,
                 placeholderText = "Digite seu nome (ex: Michael)",
                 showSearchButton = true,
+                debounceMillis = 0L,
                 testTagInput = "name_search_input"
             )
         }
@@ -300,9 +286,13 @@ fun MinhaEscalaScreen(
                 // Hero Card: Focus on next upcoming assignment (or informative state if none)
                 item {
                     if (nextDuty != null) {
+                        val heroInteractionSource = remember { MutableInteractionSource() }
                         Card(
+                            onClick = onNavigateToCalendar,
+                            interactionSource = heroInteractionSource,
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .pressScale(heroInteractionSource)
                                 .testTag("hero_next_duty_card"),
                             shape = RoundedCornerShape(14.dp),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
@@ -391,9 +381,13 @@ fun MinhaEscalaScreen(
                         }
                     } else {
                         // All duties are past duties
+                        val noFutureInteractionSource = remember { MutableInteractionSource() }
                         Card(
+                            onClick = { filtroTempo = FiltroTempoMinhaEscala.HISTORICO },
+                            interactionSource = noFutureInteractionSource,
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .pressScale(noFutureInteractionSource)
                                 .testTag("hero_no_future_duties_card"),
                             shape = RoundedCornerShape(14.dp),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
@@ -467,44 +461,108 @@ fun MinhaEscalaScreen(
                     }
                 }
 
-                // Summary Stats Chips (Step 5: Resumo Minha Escala)
+                // Summary Stats Section: Editorial horizontal strip without boxes/cards
                 item {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         // Total
-                        Card(
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                        val totalInteractionSource = remember { MutableInteractionSource() }
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .pressScale(totalInteractionSource)
+                                .clickable(
+                                    interactionSource = totalInteractionSource,
+                                    indication = null
+                                ) { filtroTempo = FiltroTempoMinhaEscala.TODAS }
+                                .padding(vertical = 6.dp)
+                                .testTag("stats_summary_total"),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Column(modifier = Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(text = "${todasEscalas.size}", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                                Text(text = "Total", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
+                            Text(
+                                text = "${todasEscalas.size}",
+                                fontSize = 24.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Total",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
+
+                        VerticalDivider(
+                            modifier = Modifier.height(36.dp),
+                            thickness = 1.dp,
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                        )
+
                         // Próximas
-                        Card(
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f))
+                        val proximasInteractionSource = remember { MutableInteractionSource() }
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .pressScale(proximasInteractionSource)
+                                .clickable(
+                                    interactionSource = proximasInteractionSource,
+                                    indication = null
+                                ) { filtroTempo = FiltroTempoMinhaEscala.FUTURAS }
+                                .padding(vertical = 6.dp)
+                                .testTag("stats_summary_proximas"),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Column(modifier = Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(text = "${escalasFuturas.size}", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                                Text(text = "Próximas", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
+                            Text(
+                                text = "${escalasFuturas.size}",
+                                fontSize = 24.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Próximas",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
+
+                        VerticalDivider(
+                            modifier = Modifier.height(36.dp),
+                            thickness = 1.dp,
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                        )
+
                         // Concluídas
-                        Card(
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                        val concluidasInteractionSource = remember { MutableInteractionSource() }
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .pressScale(concluidasInteractionSource)
+                                .clickable(
+                                    interactionSource = concluidasInteractionSource,
+                                    indication = null
+                                ) { filtroTempo = FiltroTempoMinhaEscala.HISTORICO }
+                                .padding(vertical = 6.dp)
+                                .testTag("stats_summary_concluidas"),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Column(modifier = Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(text = "${escalasPassadas.size}", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(text = "Concluídas", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
+                            Text(
+                                text = "${escalasPassadas.size}",
+                                fontSize = 24.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = successColors.text
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Concluídas",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
@@ -645,12 +703,14 @@ fun MinhaEscalaScreen(
                         val isPast = DateUtils.isDataPassada(item.localDate, today)
                         val isDutyToday = item.localDate == today
                         val churchColor = getChurchColor(item.igreja, isDark = isDark)
+                        val dutyInteractionSource = remember(item.igreja, item.data, item.funcao) { MutableInteractionSource() }
 
                         // Rule 2: Past scales lose visual emphasis (opacity 0.60f, neutral gray stripe & badge)
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .then(if (isPast) Modifier.alpha(0.60f) else Modifier)
+                                .pressScale(dutyInteractionSource)
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(MaterialTheme.colorScheme.surface)
                                 .border(
@@ -658,6 +718,12 @@ fun MinhaEscalaScreen(
                                     if (isPast) MaterialTheme.colorScheme.outline.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outline,
                                     RoundedCornerShape(10.dp)
                                 )
+                                .clickable(
+                                    interactionSource = dutyInteractionSource,
+                                    indication = null
+                                ) {
+                                    onNavigateToCalendar()
+                                }
                         ) {
                             Row(modifier = Modifier.fillMaxWidth()) {
                                 // Colored side stripe: neutral gray if past, vibrant church color if upcoming/today

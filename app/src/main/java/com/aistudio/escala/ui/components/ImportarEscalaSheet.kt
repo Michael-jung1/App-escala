@@ -2,6 +2,7 @@ package com.aistudio.escala.ui.components
 
 import android.net.Uri
 import android.util.Log
+import com.aistudio.escala.util.traduzirErroImportacao
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -69,6 +70,7 @@ import com.aistudio.escala.data.ImportResult
 import com.aistudio.escala.data.ParsedEscala
 import com.aistudio.escala.data.ParsedIgreja
 import com.aistudio.escala.parser.EscalaDocumentManager
+import com.aistudio.escala.parser.GeminiScheduleParser
 import com.aistudio.escala.ui.theme.getChurchColor
 import com.aistudio.escala.ui.theme.getErrorColor
 import com.aistudio.escala.ui.theme.getSuccessColor
@@ -99,6 +101,12 @@ fun ImportarEscalaCard(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
+            val fileSize = GeminiScheduleParser.getFileSize(context, uri)
+            if (fileSize > GeminiScheduleParser.MAX_FILE_SIZE_BYTES) {
+                errorMessage = GeminiScheduleParser.ERROR_FILE_TOO_LARGE
+                return@rememberLauncherForActivityResult
+            }
+
             isProcessing = true
             errorMessage = null
             processingStep = "Lendo e processando arquivo..."
@@ -112,7 +120,7 @@ fun ImportarEscalaCard(
                 } catch (e: Exception) {
                     Log.e("ImportarEscalaSheet", "Falha interna ao processar documento", e)
                     isProcessing = false
-                    errorMessage = "Não foi possível importar o arquivo. Verifique o formato e tente novamente."
+                    errorMessage = traduzirErroImportacao(e)
                 }
             }
         }
@@ -123,6 +131,12 @@ fun ImportarEscalaCard(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
+            val fileSize = GeminiScheduleParser.getFileSize(context, uri)
+            if (fileSize > GeminiScheduleParser.MAX_FILE_SIZE_BYTES) {
+                errorMessage = GeminiScheduleParser.ERROR_FILE_TOO_LARGE
+                return@rememberLauncherForActivityResult
+            }
+
             isProcessing = true
             errorMessage = null
             processingStep = "Lendo e processando arquivo..."
@@ -136,7 +150,7 @@ fun ImportarEscalaCard(
                 } catch (e: Exception) {
                     Log.e("ImportarEscalaSheet", "Falha interna ao processar documento via fallback picker", e)
                     isProcessing = false
-                    errorMessage = "Não foi possível importar o arquivo. Verifique o formato e tente novamente."
+                    errorMessage = traduzirErroImportacao(e)
                 }
             }
         }
@@ -374,22 +388,28 @@ fun ImportarEscalaCard(
             onConfirm = { finalPeriodo ->
                 val finalEscala = escala.copy(periodo = finalPeriodo)
                 coroutineScope.launch {
-                    isProcessing = true
-                    processingStep = "Gravando dados no banco de dados..."
-                    parsedEscala = null
-                    val result = repository.importarEscala(finalEscala)
-                    isProcessing = false
-                    when (result) {
-                        is ImportResult.Success -> {
-                            successResult = result
-                            errorMessage = null
-                            onImportSuccess(result.periodo)
+                    try {
+                        isProcessing = true
+                        processingStep = "Gravando dados no banco de dados..."
+                        parsedEscala = null
+                        val result = repository.importarEscala(finalEscala)
+                        isProcessing = false
+                        when (result) {
+                            is ImportResult.Success -> {
+                                successResult = result
+                                errorMessage = null
+                                onImportSuccess(result.periodo)
+                            }
+                            is ImportResult.Error -> {
+                                Log.e("ImportarEscalaSheet", "Erro ao gravar escala no banco: ${result.message}")
+                                errorMessage = "Não foi possível importar a escala agora. Tente novamente ou entre em contato com o suporte."
+                                successResult = null
+                            }
                         }
-                        is ImportResult.Error -> {
-                            Log.e("ImportarEscalaSheet", "Erro ao gravar escala no banco: ${result.message}")
-                            errorMessage = "Não foi possível importar o arquivo. Verifique o formato e tente novamente."
-                            successResult = null
-                        }
+                    } catch (e: Exception) {
+                        Log.e("ImportarEscalaSheet", "Erro ao gravar escala no banco de dados", e)
+                        isProcessing = false
+                        errorMessage = traduzirErroImportacao(e)
                     }
                 }
             }

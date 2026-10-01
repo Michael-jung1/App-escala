@@ -104,4 +104,23 @@ object SecurityUtils {
             context.getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE)
         }
     }
+
+    const val KEY_DB_PASSPHRASE = "escala_db_encryption_passphrase"
+
+    /**
+     * Obtém ou gera uma chave de criptografia de 256 bits (32 bytes em hexadecimal) para o banco de dados SQLCipher.
+     * A chave é armazenada de forma segura em EncryptedSharedPreferences (protegida pelo Android KeyStore).
+     */
+    @Synchronized
+    fun getDatabasePassphrase(context: Context): String {
+        val securePrefs = getEncryptedPreferences(context)
+        var passphrase = securePrefs.getString(KEY_DB_PASSPHRASE, null)
+        if (passphrase.isNullOrBlank()) {
+            val keyBytes = ByteArray(32)
+            SecureRandom().nextBytes(keyBytes)
+            passphrase = keyBytes.joinToString("") { "%02x".format(it) }
+            securePrefs.edit().putString(KEY_DB_PASSPHRASE, passphrase).apply()
+        }
+        return passphrase
+    }
 }

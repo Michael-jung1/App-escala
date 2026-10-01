@@ -1,6 +1,7 @@
 package com.aistudio.escala.ui.components
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -58,11 +59,13 @@ fun SearchBarWithAutocomplete(
     var isSuggestionsOpen by remember { mutableStateOf(false) }
     var suggestions by remember { mutableStateOf<List<String>>(emptyList()) }
 
-    // Debounced autocomplete filtering with normalized & fuzzy matching
+    // Autocomplete filtering with normalized & fuzzy matching (local and instant when debounceMillis is 0)
     LaunchedEffect(value, allPeople) {
         val query = value.trim()
         if (query.length >= 2) {
-            delay(debounceMillis)
+            if (debounceMillis > 0L) {
+                delay(debounceMillis)
+            }
             suggestions = SearchUtils.filtrarSugestoes(allPeople, query, limite = 6)
         } else {
             suggestions = emptyList()
@@ -160,10 +163,15 @@ fun SearchBarWithAutocomplete(
                 ) {
                     Column(modifier = Modifier.heightIn(max = 220.dp)) {
                         suggestions.forEach { personName ->
+                            val itemInteractionSource = remember(personName) { MutableInteractionSource() }
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable {
+                                    .pressScale(itemInteractionSource)
+                                    .clickable(
+                                        interactionSource = itemInteractionSource,
+                                        indication = null
+                                    ) {
                                         isSuggestionsOpen = false
                                         focusManager.clearFocus()
                                         onValueChange(personName)

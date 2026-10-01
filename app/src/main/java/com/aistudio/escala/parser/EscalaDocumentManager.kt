@@ -35,6 +35,11 @@ object EscalaDocumentManager {
     }
 
     suspend fun processarArquivo(context: Context, uri: Uri): ParsedEscala = withContext(Dispatchers.IO) {
+        val fileSize = GeminiScheduleParser.getFileSize(context, uri)
+        if (fileSize > GeminiScheduleParser.MAX_FILE_SIZE_BYTES) {
+            throw IllegalArgumentException(GeminiScheduleParser.ERROR_FILE_TOO_LARGE)
+        }
+
         val fileName = obterNomeArquivo(context, uri)
         val mimeType = context.contentResolver.getType(uri) ?: ""
         val lowerName = fileName.lowercase()

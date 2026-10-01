@@ -88,6 +88,7 @@ CREATE TABLE coordenador (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     nome            TEXT NOT NULL,
     chave_acesso    TEXT NOT NULL UNIQUE,   -- código simples digitado no login provisório
+    is_admin        INTEGER NOT NULL DEFAULT 0, -- 1 para administradores autorizados a gerenciar acessos
     criado_em       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

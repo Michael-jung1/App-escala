@@ -27,6 +27,10 @@ class EscalaRepository(context: Context) {
         dbHelper.listarDatasDisponiveis()
     }
 
+    suspend fun autenticarCoordenador(codigoDigitado: String): Coordenador? = withContext(Dispatchers.IO) {
+        dbHelper.autenticarCoordenador(codigoDigitado)
+    }
+
     suspend fun loginCoordenador(chaveAcesso: String): Coordenador? = withContext(Dispatchers.IO) {
         dbHelper.autenticarCoordenador(chaveAcesso)
     }
@@ -64,8 +68,8 @@ class EscalaRepository(context: Context) {
         dbHelper.listarPostosDaIgreja(igrejaId, apenasFuturas)
     }
 
-    suspend fun atualizarEscalacao(escalacaoId: Long, novoNome: String): Boolean = withContext(Dispatchers.IO) {
-        dbHelper.atualizarEscalacao(escalacaoId, novoNome)
+    suspend fun atualizarEscalacao(escalacaoId: Long, novoNome: String, coordenadorId: Long): Boolean = withContext(Dispatchers.IO) {
+        dbHelper.atualizarEscalacao(escalacaoId, novoNome, coordenadorId)
     }
 
     suspend fun getPeriodos(): List<String> = withContext(Dispatchers.IO) {

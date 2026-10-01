@@ -48,6 +48,9 @@ android {
         compose = true
         buildConfig = true
     }
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -68,6 +71,10 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.security.crypto)
+    implementation(libs.sqlcipher)
+    implementation(libs.androidx.sqlite)
+    implementation(libs.androidx.sqlite.framework)
     testImplementation(libs.junit)
+    testImplementation("org.json:json:20240303")
     debugImplementation(libs.androidx.ui.tooling)
 }

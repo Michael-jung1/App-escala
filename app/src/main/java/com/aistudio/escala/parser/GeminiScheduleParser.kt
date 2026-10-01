@@ -96,6 +96,33 @@ object GeminiClient {
 
 object GeminiScheduleParser {
     private const val TAG = "GeminiScheduleParser"
+    const val MAX_FILE_SIZE_BYTES: Long = 15 * 1024 * 1024L // 15MB
+    const val ERROR_FILE_TOO_LARGE = "Arquivo muito grande. Selecione um arquivo com até 15MB ou divida a escala em partes menores."
+
+    /**
+     * Obtém o tamanho do arquivo em bytes associado à Uri,
+     * utilizando statSize de openFileDescriptor ou consultando OpenableColumns.SIZE como fallback.
+     */
+    fun getFileSize(context: Context, uri: Uri): Long {
+        try {
+            context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                val size = pfd.statSize
+                if (size > 0) return size
+            }
+        } catch (_: Exception) {}
+
+        try {
+            context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                val sizeIndex = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                if (sizeIndex != -1 && cursor.moveToFirst() && !cursor.isNull(sizeIndex)) {
+                    val size = cursor.getLong(sizeIndex)
+                    if (size > 0) return size
+                }
+            }
+        } catch (_: Exception) {}
+
+        return -1L
+    }
 
     suspend fun parseDocumentWithGemini(
         context: Context,
@@ -110,9 +137,20 @@ object GeminiScheduleParser {
             )
         }
 
-        // Read file bytes
-        val fileBytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            ?: throw IllegalArgumentException("Não foi possível ler o arquivo selecionado.")
+        // Verificação defensiva de tamanho do arquivo antes de carregar na memória e codificar em Base64
+        val fileSize = getFileSize(context, uri)
+        if (fileSize > MAX_FILE_SIZE_BYTES) {
+            throw IllegalArgumentException(ERROR_FILE_TOO_LARGE)
+        }
+
+        // Read file bytes com salvaguarda de tamanho caso statSize retorne -1 em streams dinâmicos
+        val fileBytes = context.contentResolver.openInputStream(uri)?.use { stream ->
+            val bytes = stream.readBytes()
+            if (bytes.size > MAX_FILE_SIZE_BYTES) {
+                throw IllegalArgumentException(ERROR_FILE_TOO_LARGE)
+            }
+            bytes
+        } ?: throw IllegalArgumentException("Não foi possível ler o arquivo selecionado.")
 
         val base64Data = Base64.encodeToString(fileBytes, Base64.NO_WRAP)
 
@@ -208,8 +246,8 @@ object GeminiScheduleParser {
         for (i in 0 until igrejasJson.length()) {
             val igObj = igrejasJson.getJSONObject(i)
             val nomeIgreja = igObj.optString("igreja", "Igreja ${i + 1}")
-            val titulo = igObj.optString("titulo", null)
-            val coordenadores = igObj.optString("coordenadores", null)
+            val titulo = igObj.optString("titulo").takeIf { it.isNotBlank() }
+            val coordenadores = igObj.optString("coordenadores").takeIf { it.isNotBlank() }
 
             val datasJson = igObj.optJSONArray("datas")
             val datasList = mutableListOf<String>()

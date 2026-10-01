@@ -43,7 +43,8 @@ class PreferencesManager(context: Context) {
         val legacyKey = prefs.getString(KEY_COORDENADOR_CHAVE, null)
             ?: defaultPrefs.getString(KEY_COORDENADOR_CHAVE, null)
         if (legacyKey != null) {
-            securePrefs.edit().putString(KEY_COORDENADOR_CHAVE, legacyKey).apply()
+            val hashed = if (SecurityUtils.isHash(legacyKey)) legacyKey else SecurityUtils.hashAccessCode(legacyKey)
+            securePrefs.edit().putString(KEY_COORDENADOR_CHAVE, hashed).apply()
             prefs.edit().remove(KEY_COORDENADOR_CHAVE).apply()
             defaultPrefs.edit().remove(KEY_COORDENADOR_CHAVE).apply()
         }
@@ -102,18 +103,30 @@ class PreferencesManager(context: Context) {
     var coordenadorChave: String?
         get() {
             val secureVal = securePrefs.getString(KEY_COORDENADOR_CHAVE, null)
-            if (secureVal != null) return secureVal
+            if (secureVal != null) {
+                if (!SecurityUtils.isHash(secureVal)) {
+                    val hashed = SecurityUtils.hashAccessCode(secureVal)
+                    securePrefs.edit().putString(KEY_COORDENADOR_CHAVE, hashed).apply()
+                    return hashed
+                }
+                return secureVal
+            }
             val legacy = prefs.getString(KEY_COORDENADOR_CHAVE, null)
+                ?: defaultPrefs.getString(KEY_COORDENADOR_CHAVE, null)
             if (legacy != null) {
-                securePrefs.edit().putString(KEY_COORDENADOR_CHAVE, legacy).apply()
+                val hashed = if (SecurityUtils.isHash(legacy)) legacy else SecurityUtils.hashAccessCode(legacy)
+                securePrefs.edit().putString(KEY_COORDENADOR_CHAVE, hashed).apply()
                 prefs.edit().remove(KEY_COORDENADOR_CHAVE).apply()
-                return legacy
+                defaultPrefs.edit().remove(KEY_COORDENADOR_CHAVE).apply()
+                return hashed
             }
             return null
         }
         set(value) {
             if (value != null) {
-                securePrefs.edit().putString(KEY_COORDENADOR_CHAVE, value).apply()
+                // Apenas um hash SHA-256 com salt é armazenado, nunca a senha original
+                val hashed = if (SecurityUtils.isHash(value)) value else SecurityUtils.hashAccessCode(value)
+                securePrefs.edit().putString(KEY_COORDENADOR_CHAVE, hashed).apply()
             } else {
                 securePrefs.edit().remove(KEY_COORDENADOR_CHAVE).apply()
             }

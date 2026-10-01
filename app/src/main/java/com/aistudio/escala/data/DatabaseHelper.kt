@@ -2,15 +2,17 @@ package com.aistudio.escala.data
 
 import android.content.ContentValues
 import android.content.Context
-import android.database.sqlite.SQLiteDatabase
-import android.database.sqlite.SQLiteOpenHelper
 import android.util.Log
 import com.aistudio.escala.util.DateUtils
 import com.aistudio.escala.util.SearchUtils
 import com.aistudio.escala.util.SecurityUtils
+import net.sqlcipher.database.SQLiteDatabase
+import net.sqlcipher.database.SQLiteOpenHelper
 import java.io.File
 import java.io.FileOutputStream
 import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VERSION) {
 
@@ -35,6 +37,39 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
             return if (limpo.length > maxLength) limpo.substring(0, maxLength).trim() else limpo
         }
 
+        /**
+         * Escapa caracteres especiais do operador LIKE no SQLite (%, _ e \)
+         * permitindo que sejam tratados como literais com a cláusula ESCAPE '\'.
+         */
+        fun escapeSqliteLike(input: String): String {
+            return input
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+        }
+
+        /**
+         * Verifica se um arquivo de banco de dados é SQLite padrão em texto puro (não criptografado).
+         * Arquivos SQLite em texto puro sempre iniciam com o cabeçalho ASCII "SQLite format 3\u0000".
+         */
+        fun isPlaintextDatabase(file: File): Boolean {
+            if (!file.exists() || file.length() < 16) return false
+            return try {
+                file.inputStream().use { input ->
+                    val header = ByteArray(16)
+                    val bytesRead = input.read(header)
+                    if (bytesRead == 16) {
+                        val headerStr = String(header, Charsets.US_ASCII)
+                        headerStr.startsWith("SQLite format 3")
+                    } else {
+                        false
+                    }
+                }
+            } catch (e: Exception) {
+                false
+            }
+        }
+
         fun getInstance(context: Context): DatabaseHelper {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: DatabaseHelper(context.applicationContext).also { INSTANCE = it }
@@ -42,24 +77,88 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
         }
     }
 
+    val passphrase: String
+        get() = SecurityUtils.getDatabasePassphrase(context)
+
+    val writableDatabase: SQLiteDatabase
+        get() = getWritableDatabase(passphrase)
+
+    val readableDatabase: SQLiteDatabase
+        get() = getReadableDatabase(passphrase)
+
     init {
-        copyDatabaseIfNeeded()
+        try {
+            SQLiteDatabase.loadLibs(context)
+        } catch (e: Throwable) {
+            Log.e(TAG, "Falha ao carregar bibliotecas nativas do SQLCipher", e)
+        }
+        ensureEncryptedDatabase()
     }
 
-    private fun copyDatabaseIfNeeded() {
+    private fun ensureEncryptedDatabase() {
         val dbFile = context.getDatabasePath(DB_NAME)
-        if (!dbFile.exists()) {
-            try {
-                dbFile.parentFile?.mkdirs()
+        dbFile.parentFile?.mkdirs()
+
+        val tempPlainFile = File(context.cacheDir, "temp_escala_plain.db")
+        try {
+            if (!dbFile.exists()) {
+                // Primeira execução: copia o escala.db de assets para arquivo temporário e criptografa em repouso
+                Log.d(TAG, "Primeira execução: copiando escala.db de assets e criptografando com SQLCipher...")
                 context.assets.open(DB_NAME).use { input ->
-                    FileOutputStream(dbFile).use { output ->
+                    FileOutputStream(tempPlainFile).use { output ->
                         input.copyTo(output)
                     }
                 }
-                Log.d(TAG, "Successfully copied escala.db from assets to ${dbFile.absolutePath}")
-            } catch (e: Exception) {
-                Log.e(TAG, "Error copying database from assets", e)
+                encryptPlaintextDatabase(tempPlainFile, dbFile, passphrase)
+                Log.d(TAG, "Banco escala.db criado e criptografado com sucesso em repouso.")
+            } else if (isPlaintextDatabase(dbFile)) {
+                // Migração transparente de banco legado em texto puro para criptografado em repouso
+                Log.d(TAG, "Detectado escala.db em texto puro. Migrando dados para formato criptografado SQLCipher...")
+                if (tempPlainFile.exists()) tempPlainFile.delete()
+                val renamed = dbFile.renameTo(tempPlainFile)
+                if (!renamed) {
+                    dbFile.inputStream().use { input ->
+                        FileOutputStream(tempPlainFile).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    dbFile.delete()
+                }
+                encryptPlaintextDatabase(tempPlainFile, dbFile, passphrase)
+                Log.d(TAG, "Migração para banco criptografado SQLCipher concluída com sucesso.")
+            } else {
+                Log.d(TAG, "Banco escala.db já está devidamente criptografado com SQLCipher.")
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro durante a inicialização/criptografia do banco de dados", e)
+        } finally {
+            if (tempPlainFile.exists()) {
+                try {
+                    // Sanitiza o arquivo temporário sobrescrevendo os primeiros bytes antes de excluir
+                    tempPlainFile.writeBytes(ByteArray(minOf(tempPlainFile.length().toInt(), 4096)))
+                } catch (_: Exception) {}
+                tempPlainFile.delete()
+            }
+            // Limpa eventuais arquivos residuais de WAL/SHM legados
+            File(dbFile.parentFile, "$DB_NAME-wal").delete()
+            File(dbFile.parentFile, "$DB_NAME-shm").delete()
+            File(dbFile.parentFile, "$DB_NAME-journal").delete()
+        }
+    }
+
+    private fun encryptPlaintextDatabase(sourcePlainFile: File, targetEncryptedFile: File, key: String) {
+        if (targetEncryptedFile.exists()) {
+            targetEncryptedFile.delete()
+        }
+        val plainDb = SQLiteDatabase.openOrCreateDatabase(sourcePlainFile, "", null)
+        try {
+            val escapedPath = targetEncryptedFile.absolutePath.replace("'", "''")
+            val escapedKey = key.replace("'", "''")
+            plainDb.rawExecSQL("ATTACH DATABASE '$escapedPath' AS encrypted KEY '$escapedKey';")
+            plainDb.rawExecSQL("SELECT sqlcipher_export('encrypted');")
+            plainDb.rawExecSQL("DETACH DATABASE encrypted;")
+        } finally {
+            plainDb.close()
         }
     }
 
@@ -124,8 +223,6 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
                 db.execSQL("ALTER TABLE coordenador ADD COLUMN is_admin INTEGER DEFAULT 0")
                 Log.d(TAG, "Coluna is_admin adicionada com sucesso à tabela coordenador.")
             }
-            // Garantir que Michael Jung seja administrador (is_admin = 1)
-            db.execSQL("UPDATE coordenador SET is_admin = 1 WHERE nome LIKE '%Michael Jung%'")
         } catch (e: Exception) {
             Log.e(TAG, "Erro ao garantir coluna is_admin", e)
         }
@@ -198,9 +295,9 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
             JOIN posto ON posto.id = escalacao.posto_id
             JOIN periodo_escala ON periodo_escala.id = posto.periodo_escala_id
             JOIN igreja ON igreja.id = periodo_escala.igreja_id
-            WHERE escalacao.pessoa_nome LIKE ? COLLATE NOCASE
+            WHERE escalacao.pessoa_nome LIKE ? ESCAPE '\' COLLATE NOCASE
             """.trimIndent(),
-            arrayOf("%$trimmed%")
+            arrayOf("%${escapeSqliteLike(trimmed)}%")
         )
 
         cursor.use { c ->
@@ -352,14 +449,14 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
     }
 
     fun autenticarCoordenador(chaveAcesso: String): Coordenador? {
-        val chaveLimpa = chaveAcesso.trim().uppercase()
+        val chaveLimpa = chaveAcesso.trim()
         if (chaveLimpa.isEmpty()) return null
 
         val db = readableDatabase
         var coordenador: Coordenador? = null
 
         val cursor = db.rawQuery(
-            "SELECT id, nome, chave_acesso, COALESCE(is_admin, 0) FROM coordenador",
+            "SELECT id, nome, chave_acesso, is_admin FROM coordenador",
             null
         )
         cursor.use { c ->
@@ -367,13 +464,29 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
                 val id = c.getLong(0)
                 val nome = c.getString(1)
                 val chaveArmazenada = c.getString(2) ?: ""
-                val isAdmin = c.getInt(3) == 1
+                val isAdmin = if (c.isNull(3)) false else c.getInt(3) == 1
 
-                if (SecurityUtils.verifyAccessCode(chaveLimpa, chaveArmazenada)) {
+                val isMatch = if (SecurityUtils.isHash(chaveLimpa)) {
+                    // Login automático com hash salvo: compara o hash com as chaves ou hashes do banco via SecurityUtils.verifyAccessCode
+                    chaveLimpa == chaveArmazenada ||
+                    SecurityUtils.verifyAccessCode(chaveArmazenada, chaveLimpa) ||
+                    SecurityUtils.verifyAccessCode(chaveLimpa, chaveArmazenada)
+                } else {
+                    SecurityUtils.verifyAccessCode(chaveLimpa.uppercase(), chaveArmazenada)
+                }
+
+                if (isMatch) {
+                    val hashFinal = if (SecurityUtils.isHash(chaveArmazenada)) {
+                        chaveArmazenada
+                    } else if (SecurityUtils.isHash(chaveLimpa)) {
+                        chaveLimpa
+                    } else {
+                        SecurityUtils.hashAccessCode(chaveLimpa.uppercase())
+                    }
+
                     // Migra chave em texto puro para hash se ainda não foi migrada
                     if (!SecurityUtils.isHash(chaveArmazenada)) {
-                        val hashed = SecurityUtils.hashAccessCode(chaveLimpa)
-                        val cv = ContentValues().apply { put("chave_acesso", hashed) }
+                        val cv = ContentValues().apply { put("chave_acesso", hashFinal) }
                         writableDatabase.update("coordenador", cv, "id = ?", arrayOf(id.toString()))
                     }
 
@@ -405,7 +518,7 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
                     coordenador = Coordenador(
                         id = id,
                         nome = nome,
-                        chaveAcesso = "", // Não expõe hash ou segredo em memória
+                        chaveAcesso = hashFinal, // Armazena apenas o hash seguro com salt, nunca a senha original
                         igrejas = if (igrejas.isNotEmpty()) igrejas else listarIgrejas(),
                         isAdmin = isAdmin
                     )
@@ -417,46 +530,22 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
     }
 
     fun validarSenhaCoordenador(chaveDigitada: String): ValidacaoSenhaResult {
-        val chaveLimpa = chaveDigitada.trim().uppercase()
-        if (chaveLimpa.isEmpty()) return ValidacaoSenhaResult(isValid = false, isAdmin = false)
-
-        val db = readableDatabase
-        try {
-            val cursor = db.rawQuery(
-                "SELECT id, chave_acesso, COALESCE(is_admin, 0) FROM coordenador",
-                null
-            )
-            cursor.use { c ->
-                while (c.moveToNext()) {
-                    val id = c.getLong(0)
-                    val chaveArmazenada = c.getString(1) ?: ""
-                    val isAdmin = c.getInt(2) == 1
-
-                    if (SecurityUtils.verifyAccessCode(chaveLimpa, chaveArmazenada)) {
-                        if (!SecurityUtils.isHash(chaveArmazenada)) {
-                            val hashed = SecurityUtils.hashAccessCode(chaveLimpa)
-                            val cv = ContentValues().apply { put("chave_acesso", hashed) }
-                            writableDatabase.update("coordenador", cv, "id = ?", arrayOf(id.toString()))
-                        }
-                        return ValidacaoSenhaResult(isValid = true, isAdmin = isAdmin)
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Erro ao validar senha do coordenador", e)
+        val coord = autenticarCoordenador(chaveDigitada)
+        return if (coord != null) {
+            ValidacaoSenhaResult(isValid = true, isAdmin = coord.isAdmin)
+        } else {
+            ValidacaoSenhaResult(isValid = false, isAdmin = false)
         }
-
-        return ValidacaoSenhaResult(isValid = false, isAdmin = false)
     }
 
     fun obterSenhaCoordenador(): String {
         val db = readableDatabase
         var hashChave = ""
         try {
-            val cursor = db.rawQuery("SELECT chave_acesso FROM coordenador LIMIT 1", null)
+            val cursor = db.rawQuery("SELECT id, nome, chave_acesso, is_admin FROM coordenador", null)
             cursor.use { c ->
                 if (c.moveToFirst()) {
-                    val s = c.getString(0)
+                    val s = c.getString(2)
                     if (!s.isNullOrBlank()) {
                         hashChave = if (SecurityUtils.isHash(s)) s else SecurityUtils.hashAccessCode(s.trim().uppercase())
                     }
@@ -509,6 +598,24 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
                 put("is_admin", if (isAdmin) 1 else 0)
             }
             val id = db.insertWithOnConflict("coordenador", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+            if (id > 0) {
+                // Se o coordenador não tiver vínculos em coordenador_igreja, vincula às igrejas disponíveis
+                val cursorCount = db.rawQuery("SELECT COUNT(*) FROM coordenador_igreja WHERE coordenador_id = ?", arrayOf(id.toString()))
+                val count = cursorCount.use { if (it.moveToFirst()) it.getInt(0) else 0 }
+                if (count == 0) {
+                    val cursorIgrejas = db.rawQuery("SELECT id FROM igreja", null)
+                    cursorIgrejas.use { ci ->
+                        while (ci.moveToNext()) {
+                            val igrejaId = ci.getLong(0)
+                            val cvIgreja = ContentValues().apply {
+                                put("coordenador_id", id)
+                                put("igreja_id", igrejaId)
+                            }
+                            db.insertWithOnConflict("coordenador_igreja", null, cvIgreja, SQLiteDatabase.CONFLICT_IGNORE)
+                        }
+                    }
+                }
+            }
             id > 0
         } catch (e: Exception) {
             Log.e(TAG, "Erro ao salvar coordenador", e)
@@ -552,7 +659,10 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
 
     fun listarPostosDaIgreja(igrejaId: Long, apenasFuturas: Boolean = false): List<DiaComPostos> {
         val db = readableDatabase
-        var periodoReferencia = "Setembro de 2026"
+        val formatoPeriodo = DateTimeFormatter.ofPattern("MMMM 'de' yyyy", Locale("pt", "BR"))
+        var periodoReferencia = LocalDate.now().format(formatoPeriodo).replaceFirstChar {
+            if (it.isLowerCase()) it.titlecase(Locale("pt", "BR")) else it.toString()
+        }
         val cursorPeriodo = db.rawQuery(
             """
             SELECT id, referencia FROM periodo_escala
@@ -624,11 +734,46 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
         return resultado
     }
 
-    fun atualizarEscalacao(escalacaoId: Long, novoNome: String): Boolean {
+    fun atualizarEscalacao(escalacaoId: Long, novoNome: String, coordenadorId: Long): Boolean {
+        if (coordenadorId <= 0) {
+            Log.w(TAG, "Tentativa de atualizar escalação sem coordenador autenticado")
+            return false
+        }
         val sanitizado = sanitizeInput(novoNome, MAX_NOME_LENGTH)
         if (sanitizado.isEmpty()) return false
 
         val db = writableDatabase
+
+        // Validação de segurança: autorização baseada em vínculo com a igreja daquela escalação
+        // JOIN escalacao -> posto -> periodo_escala -> igreja -> coordenador_igreja
+        val checkPermissaoQuery = """
+            SELECT 1
+            FROM escalacao e
+            JOIN posto p ON p.id = e.posto_id
+            JOIN periodo_escala pe ON pe.id = p.periodo_escala_id
+            JOIN igreja i ON i.id = pe.igreja_id
+            LEFT JOIN coordenador_igreja ci ON ci.igreja_id = i.id AND ci.coordenador_id = ?
+            JOIN coordenador c ON c.id = ?
+            WHERE e.id = ? AND (ci.coordenador_id IS NOT NULL OR c.is_admin = 1)
+            LIMIT 1
+        """.trimIndent()
+
+        val temPermissao = try {
+            val cursor = db.rawQuery(
+                checkPermissaoQuery,
+                arrayOf(coordenadorId.toString(), coordenadorId.toString(), escalacaoId.toString())
+            )
+            cursor.use { c -> c.moveToFirst() }
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro ao validar permissões de atualização para escalação $escalacaoId e coordenador $coordenadorId", e)
+            false
+        }
+
+        if (!temPermissao) {
+            Log.e(TAG, "Acesso negado: coordenador $coordenadorId não possui vínculo com a igreja da escalação $escalacaoId")
+            return false
+        }
+
         val cv = ContentValues().apply {
             put("pessoa_nome", sanitizado)
         }
@@ -670,24 +815,42 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
 
                 // 1. Obter ou criar igreja
                 var igrejaId: Long = -1
-                val cursorIgreja = db.rawQuery(
-                    "SELECT id FROM igreja WHERE nome LIKE ? COLLATE NOCASE",
-                    arrayOf("%$nomeIgreja%")
+
+                // Avaliação relacional: primeiro tenta correspondência exata para evitar falsos positivos
+                // (ex: "São José" casando incorretamente com "São José do Rio").
+                val cursorExato = db.rawQuery(
+                    "SELECT id FROM igreja WHERE nome = ? COLLATE NOCASE",
+                    arrayOf(nomeIgreja)
                 )
-                cursorIgreja.use { c ->
-                    if (c.moveToFirst()) {
-                        igrejaId = c.getLong(0)
-                        val cvUpdate = ContentValues().apply {
-                            igrejaParsed.titulo?.let { put("titulo_escala", sanitizeInput(it, 150)) }
-                            igrejaParsed.coordenadores?.let { put("coordenadores", sanitizeInput(it, 150)) }
-                        }
-                        if (cvUpdate.size() > 0) {
-                            db.update("igreja", cvUpdate, "id = ?", arrayOf(igrejaId.toString()))
+                cursorExato.use { ce ->
+                    if (ce.moveToFirst()) {
+                        igrejaId = ce.getLong(0)
+                    }
+                }
+
+                // Fallback seguro: se não encontrar correspondência exata, busca por LIKE com escape de %, _ e \
+                if (igrejaId == -1L) {
+                    val padraoEscapado = "%${escapeSqliteLike(nomeIgreja)}%"
+                    val cursorLike = db.rawQuery(
+                        "SELECT id FROM igreja WHERE nome LIKE ? ESCAPE '\\' COLLATE NOCASE",
+                        arrayOf(padraoEscapado)
+                    )
+                    cursorLike.use { cl ->
+                        if (cl.moveToFirst()) {
+                            igrejaId = cl.getLong(0)
                         }
                     }
                 }
 
-                if (igrejaId == -1L) {
+                if (igrejaId != -1L) {
+                    val cvUpdate = ContentValues().apply {
+                        igrejaParsed.titulo?.let { put("titulo_escala", sanitizeInput(it, 150)) }
+                        igrejaParsed.coordenadores?.let { put("coordenadores", sanitizeInput(it, 150)) }
+                    }
+                    if (cvUpdate.size() > 0) {
+                        db.update("igreja", cvUpdate, "id = ?", arrayOf(igrejaId.toString()))
+                    }
+                } else {
                     val cvIgreja = ContentValues().apply {
                         put("nome", nomeIgreja)
                         put("titulo_escala", sanitizeInput(igrejaParsed.titulo, 150))

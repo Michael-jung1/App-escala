@@ -3,13 +3,21 @@ package com.aistudio.escala.ui.screens
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import androidx.activity.compose.BackHandler
 import com.aistudio.escala.util.CoordenadorLockoutManager
 import com.aistudio.escala.util.SecurityUtils
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -74,6 +82,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -99,12 +110,82 @@ import com.aistudio.escala.data.EscalaRepository
 import com.aistudio.escala.data.Igreja
 import com.aistudio.escala.data.PostoItem
 import com.aistudio.escala.ui.components.ImportarEscalaCard
+import com.aistudio.escala.ui.components.pressScale
 import com.aistudio.escala.ui.theme.getErrorColor
 import com.aistudio.escala.ui.theme.getSuccessColor
 import com.aistudio.escala.util.DateUtils
 import com.aistudio.escala.util.PreferencesManager
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+private val IgrejaSaver = listSaver<Igreja, Any?>(
+    save = { listOf(it.id, it.nome, it.tituloEscala, it.coordenadores) },
+    restore = {
+        Igreja(
+            id = (it[0] as Number).toLong(),
+            nome = it[1] as String,
+            tituloEscala = it[2] as? String,
+            coordenadores = it[3] as? String
+        )
+    }
+)
+
+private val NullableIgrejaSaver = Saver<Igreja?, Any>(
+    save = { igreja -> igreja?.let { with(IgrejaSaver) { save(it) } } },
+    restore = { obj -> (obj as? List<*>)?.let { with(IgrejaSaver) { restore(it) } } }
+)
+
+private val PostoItemSaver = listSaver<PostoItem, Any?>(
+    save = { listOf(it.escalacaoId, it.funcao, it.pessoaNome) },
+    restore = {
+        PostoItem(
+            escalacaoId = (it[0] as Number).toLong(),
+            funcao = it[1] as String,
+            pessoaNome = it[2] as String
+        )
+    }
+)
+
+private val NullablePostoItemSaver = Saver<PostoItem?, Any>(
+    save = { posto -> posto?.let { with(PostoItemSaver) { save(it) } } },
+    restore = { obj -> (obj as? List<*>)?.let { with(PostoItemSaver) { restore(it) } } }
+)
+
+private val CoordenadorSaver = listSaver<Coordenador, Any?>(
+    save = {
+        listOf(
+            it.id,
+            it.nome,
+            it.chaveAcesso,
+            it.isAdmin,
+            it.igrejas.map { ig -> listOf(ig.id, ig.nome, ig.tituloEscala, ig.coordenadores) }
+        )
+    },
+    restore = {
+        @Suppress("UNCHECKED_CAST")
+        val rawList = it[4] as? List<List<Any?>>
+        val igs = rawList?.map { ig ->
+            Igreja(
+                id = (ig[0] as Number).toLong(),
+                nome = ig[1] as String,
+                tituloEscala = ig[2] as? String,
+                coordenadores = ig[3] as? String
+            )
+        } ?: emptyList()
+        Coordenador(
+            id = (it[0] as Number).toLong(),
+            nome = it[1] as String,
+            chaveAcesso = it[2] as String,
+            isAdmin = it[3] as Boolean,
+            igrejas = igs
+        )
+    }
+)
+
+private val NullableCoordenadorSaver = Saver<Coordenador?, Any>(
+    save = { coord -> coord?.let { with(CoordenadorSaver) { save(it) } } },
+    restore = { obj -> (obj as? List<*>)?.let { with(CoordenadorSaver) { restore(it) } } }
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -123,12 +204,16 @@ fun CoordenadorScreen(
     val prefs = remember(context) { context.getSharedPreferences("escala_prefs", Context.MODE_PRIVATE) }
     val defaultPrefs = remember(context) { context.getSharedPreferences("${context.packageName}_preferences", Context.MODE_PRIVATE) }
 
+    remember(context) {
+        CoordenadorLockoutManager.init(context)
+    }
+
     // Regra 1: Variável de estado que inicia como falsa
-    var isAuthorized by remember { mutableStateOf(false) }
-    var isAdmin by remember { mutableStateOf(preferencesManager.isAdminCache) }
+    var isAuthorized by rememberSaveable { mutableStateOf(false) }
+    var isAdmin by rememberSaveable { mutableStateOf(preferencesManager.isAdminCache) }
 
     // Estados da barreira de acesso / tela de bloqueio
-    var lockPasswordInput by remember { mutableStateOf("") }
+    var lockPasswordInput by rememberSaveable { mutableStateOf("") }
     var lockErrorMessage by remember { mutableStateOf<String?>(null) }
     var isOnline by remember { mutableStateOf(false) }
 
@@ -145,21 +230,20 @@ fun CoordenadorScreen(
         }
     }
 
-    // Estados do layout original do coordenador
-    var coordinator by remember { mutableStateOf<Coordenador?>(null) }
-    var accessKeyInput by remember { mutableStateOf(preferencesManager.coordenadorChave ?: "") }
-    var loginError by remember { mutableStateOf<String?>(null) }
+    // Estados do coordenador
+    var coordinator by rememberSaveable(stateSaver = NullableCoordenadorSaver) { mutableStateOf<Coordenador?>(null) }
     var isLoggingIn by remember { mutableStateOf(false) }
 
-    var selectedChurch by remember { mutableStateOf<Igreja?>(null) }
+    var selectedChurch by rememberSaveable(stateSaver = NullableIgrejaSaver) { mutableStateOf<Igreja?>(null) }
     var isChurchMenuExpanded by remember { mutableStateOf(false) }
-    var showPastDays by remember { mutableStateOf(false) }
+    var showPastDays by rememberSaveable { mutableStateOf(false) }
 
     var scheduleDays by remember { mutableStateOf<List<DiaComPostos>>(emptyList()) }
     var isLoadingSchedule by remember { mutableStateOf(false) }
 
-    var editingPosto by remember { mutableStateOf<PostoItem?>(null) }
-    var editedName by remember { mutableStateOf("") }
+    var editingPosto by rememberSaveable(stateSaver = NullablePostoItemSaver) { mutableStateOf<PostoItem?>(null) }
+    var editedName by rememberSaveable { mutableStateOf("") }
+    var editDialogError by remember { mutableStateOf<String?>(null) }
     var saveSuccessMessage by remember { mutableStateOf<String?>(null) }
 
     // Estados do Gerenciamento de Acessos (Apenas Administrador)
@@ -189,39 +273,24 @@ fun CoordenadorScreen(
         }
     }
 
-    // Regra 2: Ao carregar a tela, verifique a conexão com a internet.
-    // Se houver rede, busca o hash da senha atualizada no banco de dados e salva no EncryptedSharedPreferences (PreferencesManager).
+    // Ao carregar a tela, verifica rede e recupera sessão salva
     LaunchedEffect(Unit) {
         val hasNet = checkInternetConnection()
         isOnline = hasNet
-        if (hasNet) {
-            try {
-                delay(300) // Simula latência de rede na busca
-                val hashAtualizado = repository.getSenhaCoordenador()
-                if (hashAtualizado.isNotBlank()) {
-                    preferencesManager.senhaCoordCache = hashAtualizado
-                }
-            } catch (_: Exception) {
-            }
-        } else {
-            // Em modo offline no primeiro uso, se não houver senha no cache ainda, garante o hash
-            if (preferencesManager.senhaCoordCache == null) {
-                val hashPadrao = repository.getSenhaCoordenador()
-                if (hashPadrao.isNotBlank()) {
-                    preferencesManager.senhaCoordCache = hashPadrao
-                }
-            }
-        }
 
         // Carrega sessão salva caso exista
         val savedKey = preferencesManager.coordenadorChave
         if (!savedKey.isNullOrBlank()) {
-            val coord = repository.loginCoordenador(savedKey)
+            val coord = repository.autenticarCoordenador(savedKey)
             if (coord != null) {
                 coordinator = coord
                 isAdmin = coord.isAdmin
                 preferencesManager.isAdminCache = coord.isAdmin
+                prefs.edit().putBoolean("isAdmin_cache", coord.isAdmin).apply()
+                defaultPrefs.edit().putBoolean("isAdmin_cache", coord.isAdmin).apply()
                 selectedChurch = coord.igrejas.firstOrNull()
+                isAuthorized = true
+                if (coord.isAdmin) carregarAcessos()
             }
         }
     }
@@ -229,62 +298,34 @@ fun CoordenadorScreen(
     fun loadChurchSchedule(churchId: Long, past: Boolean) {
         isLoadingSchedule = true
         coroutineScope.launch {
-            val days = repository.getPostosDaIgreja(churchId, apenasFuturas = !past)
-            scheduleDays = days
-            isLoadingSchedule = false
+            try {
+                val days = repository.getPostosDaIgreja(churchId, apenasFuturas = !past)
+                scheduleDays = days
+            } finally {
+                isLoadingSchedule = false
+            }
         }
     }
 
-    LaunchedEffect(selectedChurch, showPastDays) {
-        selectedChurch?.let { church ->
-            loadChurchSchedule(church.id, showPastDays)
+    LaunchedEffect(selectedChurch?.id, showPastDays) {
+        val church = selectedChurch
+        if (church != null) {
+            isLoadingSchedule = true
+            try {
+                val days = repository.getPostosDaIgreja(church.id, apenasFuturas = !showPastDays)
+                scheduleDays = days
+            } finally {
+                isLoadingSchedule = false
+            }
+        } else {
+            scheduleDays = emptyList()
+            isLoadingSchedule = false
         }
     }
 
     LaunchedEffect(isAdmin, isAuthorized) {
         if (isAdmin && isAuthorized) {
             carregarAcessos()
-        }
-    }
-
-    fun executeLogin(key: String) {
-        if (CoordenadorLockoutManager.isLockedOut()) {
-            val secs = CoordenadorLockoutManager.getRemainingSeconds()
-            remainingSeconds = secs
-            loginError = "Muitas tentativas inválidas. Aguarde $secs segundos para tentar novamente."
-            return
-        }
-
-        val cleanKey = key.trim()
-        if (cleanKey.isEmpty()) return
-        isLoggingIn = true
-        loginError = null
-
-        coroutineScope.launch {
-            val result = repository.loginCoordenador(cleanKey)
-            if (result != null) {
-                CoordenadorLockoutManager.reset()
-                remainingSeconds = 0
-                coordinator = result
-                isAdmin = result.isAdmin
-                preferencesManager.isAdminCache = result.isAdmin
-                prefs.edit().putBoolean("isAdmin_cache", result.isAdmin).apply()
-                defaultPrefs.edit().putBoolean("isAdmin_cache", result.isAdmin).apply()
-                selectedChurch = result.igrejas.firstOrNull()
-                preferencesManager.coordenadorChave = cleanKey
-                if (result.isAdmin) carregarAcessos()
-            } else {
-                CoordenadorLockoutManager.recordFailedAttempt()
-                if (CoordenadorLockoutManager.isLockedOut()) {
-                    val secs = CoordenadorLockoutManager.getRemainingSeconds()
-                    remainingSeconds = secs
-                    loginError = "Limite de tentativas excedido. Bloqueado temporariamente por $secs segundos."
-                } else {
-                    val restantes = CoordenadorLockoutManager.MAX_ATTEMPTS - CoordenadorLockoutManager.failedAttempts
-                    loginError = "Chave de acesso inválida. Restam $restantes tentativa(s) antes do bloqueio temporário."
-                }
-            }
-            isLoggingIn = false
         }
     }
 
@@ -303,9 +344,8 @@ fun CoordenadorScreen(
         lockErrorMessage = null
     }
 
-    // Regra 4 & 5: Validação offline ao clicar em 'Entrar'
-    // Compara a senha digitada com o cache seguro e aplica rate limit contra força bruta persistido em memória.
-    fun validarSenhaOffline() {
+    // Autenticação unificada de coordenadores: valida contra todos os coordenadores cadastrados
+    fun executarLogin(codigoDigitado: String) {
         if (CoordenadorLockoutManager.isLockedOut()) {
             val secs = CoordenadorLockoutManager.getRemainingSeconds()
             remainingSeconds = secs
@@ -313,78 +353,72 @@ fun CoordenadorScreen(
             return
         }
 
-        val digitada = lockPasswordInput.trim()
+        val digitada = codigoDigitado.trim()
         if (digitada.isEmpty()) {
-            lockErrorMessage = "Por favor, digite a senha."
+            lockErrorMessage = "Por favor, digite o código de acesso."
             return
         }
 
-        // Lê o hash exclusivamente do EncryptedSharedPreferences (PreferencesManager)
-        val hashSalvo = preferencesManager.senhaCoordCache ?: ""
+        isLoggingIn = true
+        lockErrorMessage = null
 
-        val coincides = SecurityUtils.verifyAccessCode(digitada, hashSalvo)
-
-        if (coincides) {
-            CoordenadorLockoutManager.reset()
-            remainingSeconds = 0
-            lockErrorMessage = null
-            isAuthorized = true
-
-            // Obtém isAdmin do SharedPreferences (offline) como fallback inicial
-            val cachedIsAdmin = prefs.getBoolean("isAdmin_cache", false)
-                ?: defaultPrefs.getBoolean("isAdmin_cache", false)
-                ?: preferencesManager.isAdminCache
-            isAdmin = cachedIsAdmin
-
-            // Se a chave coincidir com um coordenador no banco de dados, efetua login imediato e atualiza isAdmin
-            coroutineScope.launch {
-                val validation = repository.validarSenha(digitada)
-                if (validation.first) {
-                    isAdmin = validation.second
-                    preferencesManager.isAdminCache = validation.second
-                    prefs.edit().putBoolean("isAdmin_cache", validation.second).apply()
-                    defaultPrefs.edit().putBoolean("isAdmin_cache", validation.second).apply()
-                }
-
-                val coord = repository.loginCoordenador(digitada)
-                if (coord != null) {
-                    coordinator = coord
-                    isAdmin = coord.isAdmin
-                    preferencesManager.isAdminCache = coord.isAdmin
-                    prefs.edit().putBoolean("isAdmin_cache", coord.isAdmin).apply()
-                    defaultPrefs.edit().putBoolean("isAdmin_cache", coord.isAdmin).apply()
-                    selectedChurch = coord.igrejas.firstOrNull()
-                    preferencesManager.coordenadorChave = digitada
-                    if (coord.isAdmin) carregarAcessos()
-                }
-            }
-        } else {
-            CoordenadorLockoutManager.recordFailedAttempt()
-            if (CoordenadorLockoutManager.isLockedOut()) {
-                val secs = CoordenadorLockoutManager.getRemainingSeconds()
-                remainingSeconds = secs
-                lockErrorMessage = "Limite de tentativas excedido. Bloqueado temporariamente por $secs segundos."
+        coroutineScope.launch {
+            val coord = repository.autenticarCoordenador(digitada)
+            if (coord != null) {
+                CoordenadorLockoutManager.reset()
+                remainingSeconds = 0
+                coordinator = coord
+                isAdmin = coord.isAdmin
+                preferencesManager.isAdminCache = coord.isAdmin
+                prefs.edit().putBoolean("isAdmin_cache", coord.isAdmin).apply()
+                defaultPrefs.edit().putBoolean("isAdmin_cache", coord.isAdmin).apply()
+                selectedChurch = coord.igrejas.firstOrNull()
+                preferencesManager.coordenadorChave = if (coord.chaveAcesso.isNotBlank()) coord.chaveAcesso else SecurityUtils.hashAccessCode(digitada)
+                isAuthorized = true
+                lockPasswordInput = ""
+                lockErrorMessage = null
+                if (coord.isAdmin) carregarAcessos()
             } else {
-                val restantes = CoordenadorLockoutManager.MAX_ATTEMPTS - CoordenadorLockoutManager.failedAttempts
-                lockErrorMessage = "Senha incorreta. Restam $restantes tentativa(s) antes do bloqueio temporário."
+                CoordenadorLockoutManager.recordFailedAttempt()
+                if (CoordenadorLockoutManager.isLockedOut()) {
+                    val secs = CoordenadorLockoutManager.getRemainingSeconds()
+                    remainingSeconds = secs
+                    lockErrorMessage = "Limite de tentativas excedido. Bloqueado temporariamente por $secs segundos."
+                } else {
+                    val restantes = CoordenadorLockoutManager.MAX_ATTEMPTS - CoordenadorLockoutManager.failedAttempts
+                    lockErrorMessage = "Código de acesso incorreto. Restam $restantes tentativa(s) antes do bloqueio temporário."
+                }
             }
+            isLoggingIn = false
         }
     }
 
     fun saveEditedName() {
         val target = editingPosto ?: return
         val newName = editedName.trim()
-        if (newName.isEmpty()) return
+        if (newName.isEmpty()) {
+            editDialogError = "O nome não pode estar em branco."
+            return
+        }
+
+        val coordId = coordinator?.id
+        if (coordId == null || coordId <= 0L) {
+            editDialogError = "Sessão inválida. Faça login novamente para editar a escala."
+            return
+        }
 
         coroutineScope.launch {
-            val success = repository.atualizarEscalacao(target.escalacaoId, newName)
+            val success = repository.atualizarEscalacao(target.escalacaoId, newName, coordId)
             if (success) {
                 saveSuccessMessage = "Alteração salva com sucesso!"
                 editingPosto = null
+                editDialogError = null
                 // Refresh list
                 selectedChurch?.let { loadChurchSchedule(it.id, showPastDays) }
                 delay(3000)
                 saveSuccessMessage = null
+            } else {
+                editDialogError = "Permissão negada ou erro ao atualizar. Você não possui vínculo com a comunidade desta escalação."
             }
         }
     }
@@ -392,7 +426,10 @@ fun CoordenadorScreen(
     // Dialog for editing assignment
     if (editingPosto != null) {
         AlertDialog(
-            onDismissRequest = { editingPosto = null },
+            onDismissRequest = {
+                editingPosto = null
+                editDialogError = null
+            },
             title = {
                 Text(
                     text = "Editar escalação",
@@ -410,7 +447,10 @@ fun CoordenadorScreen(
                     )
                     OutlinedTextField(
                         value = editedName,
-                        onValueChange = { editedName = it },
+                        onValueChange = {
+                            editedName = it
+                            if (editDialogError != null) editDialogError = null
+                        },
                         label = { Text("Nome da pessoa") },
                         singleLine = true,
                         modifier = Modifier
@@ -421,6 +461,15 @@ fun CoordenadorScreen(
                             unfocusedBorderColor = MaterialTheme.colorScheme.outline
                         )
                     )
+                    if (editDialogError != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = editDialogError ?: "",
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp
+                        )
+                    }
                 }
             },
             confirmButton = {
@@ -436,7 +485,10 @@ fun CoordenadorScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { editingPosto = null }) {
+                TextButton(onClick = {
+                    editingPosto = null
+                    editDialogError = null
+                }) {
                     Text("Cancelar")
                 }
             }
@@ -525,6 +577,10 @@ fun CoordenadorScreen(
                             accessDialogError = if (isEditing) "Preencha o nome do coordenador." else "Preencha o nome e a chave de acesso."
                             return@Button
                         }
+                        if (!isAdmin) {
+                            accessDialogError = "Apenas administradores podem gerenciar ou conceder privilégios de acesso."
+                            return@Button
+                        }
                         coroutineScope.launch {
                             val target = editingAccessCoord
                             if (target != null) {
@@ -539,8 +595,8 @@ fun CoordenadorScreen(
                                     accessDialogError = "Erro ao atualizar. Tente outra chave."
                                 }
                             } else {
-                                val newId = repository.salvarCoordenadorAcesso(nome, chave, accessIsAdminInput)
-                                if (newId != null) {
+                                val ok = repository.salvarCoordenadorAcesso(nome, chave, accessIsAdminInput)
+                                if (ok) {
                                     carregarAcessos()
                                     showAddAccessDialog = false
                                     editingAccessCoord = null
@@ -570,142 +626,32 @@ fun CoordenadorScreen(
         )
     }
 
-    // Regra 3: Controle de interface: Se isAuthorized for falso, oculte o layout original da aba.
-    // Mostre apenas uma tela de bloqueio contendo um campo de texto para digitar a senha e um botão 'Entrar'.
-    if (!isAuthorized) {
+    // Ao estar autenticado na aba Coordenador, o botão Voltar desconecta a sessão e retorna à tela de bloqueio
+    BackHandler(enabled = isAuthorized) {
+        logout()
+    }
+
+    // Controle de interface: Se não estiver autorizado ou coordinator for nulo, exibe a tela de login
+    if (!isAuthorized || coordinator == null) {
         CoordenadorLockScreen(
             passwordInput = lockPasswordInput,
             onPasswordChange = {
                 lockPasswordInput = it
                 if (lockErrorMessage != null) lockErrorMessage = null
             },
-            onLoginClick = { validarSenhaOffline() },
+            onLoginClick = { executarLogin(lockPasswordInput) },
             errorMessage = lockErrorMessage,
             isOnline = isOnline,
             isDark = isDark,
             isLockedOut = remainingSeconds > 0,
             remainingSeconds = remainingSeconds,
+            isLoading = isLoggingIn,
             modifier = modifier
         )
     } else {
-        // Regra 5: Layout original da aba Coordenador
-        if (coordinator == null) {
-            // --- LOGIN VIEW ---
-            Column(
-                modifier = modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 24.dp, vertical = 20.dp),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = "Painel do coordenador",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    letterSpacing = 0.5.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Entrar com a chave de acesso",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(bottom = 24.dp)
-                )
-
-                OutlinedTextField(
-                    value = accessKeyInput,
-                    onValueChange = { accessKeyInput = it.uppercase() },
-                    enabled = remainingSeconds <= 0,
-                    placeholder = { Text(if (remainingSeconds > 0) "Aguarde o desbloqueio..." else "Código de acesso") },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Default.Key,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    },
-                    keyboardOptions = KeyboardOptions(
-                        capitalization = KeyboardCapitalization.Characters,
-                        imeAction = ImeAction.Done
-                    ),
-                    keyboardActions = KeyboardActions(onDone = { executeLogin(accessKeyInput) }),
-                    singleLine = true,
-                    shape = RoundedCornerShape(10.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-                        focusedContainerColor = MaterialTheme.colorScheme.surface,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surface
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("coordinator_access_key_input")
-                )
-
-                if (loginError != null) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(errorColors.background)
-                            .border(1.dp, errorColors.border, RoundedCornerShape(8.dp))
-                            .padding(12.dp)
-                    ) {
-                        Text(
-                            text = loginError ?: "",
-                            color = errorColors.text,
-                            fontSize = 13.sp,
-                            lineHeight = 18.sp
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Button(
-                    onClick = { executeLogin(accessKeyInput) },
-                    enabled = accessKeyInput.isNotBlank() && !isLoggingIn && remainingSeconds <= 0,
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp)
-                        .testTag("coordinator_login_button")
-                ) {
-                    if (isLoggingIn) {
-                        CircularProgressIndicator(
-                             modifier = Modifier.size(20.dp),
-                             color = Color.White,
-                             strokeWidth = 2.dp
-                        )
-                    } else {
-                        Text(
-                            text = if (remainingSeconds > 0) "Aguarde (${remainingSeconds}s)" else "Entrar",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(20.dp))
-                Text(
-                    text = "A chave de acesso é gerada e entregue pelo administrador do sistema.",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    lineHeight = 16.sp
-                )
-            }
-        } else {
-            // --- COORDINATOR DASHBOARD ---
-            val coord = coordinator!!
-            val firstName = coord.nome.split(" ").firstOrNull() ?: coord.nome
+        // --- COORDINATOR DASHBOARD ---
+        val coord = coordinator!!
+        val firstName = coord.nome.split(" ").firstOrNull() ?: coord.nome
 
             LazyColumn(
                 modifier = modifier
@@ -805,7 +751,10 @@ fun CoordenadorScreen(
                                         DropdownMenuItem(
                                             text = { Text(church.nome) },
                                             onClick = {
-                                                selectedChurch = church
+                                                if (selectedChurch?.id != church.id) {
+                                                    isLoadingSchedule = true
+                                                    selectedChurch = church
+                                                }
                                                 isChurchMenuExpanded = false
                                             }
                                         )
@@ -834,7 +783,10 @@ fun CoordenadorScreen(
 
                         // History Toggle Button
                         OutlinedButton(
-                            onClick = { showPastDays = !showPastDays },
+                            onClick = {
+                                isLoadingSchedule = true
+                                showPastDays = !showPastDays
+                            },
                             shape = RoundedCornerShape(10.dp),
                             border = BorderStroke(
                                 1.dp,
@@ -1024,7 +976,8 @@ fun CoordenadorScreen(
                         onImportSuccess = { periodo ->
                             coroutineScope.launch {
                                 saveSuccessMessage = "Escala de \"$periodo\" importada com sucesso!"
-                                val updatedCoord = repository.loginCoordenador(coord.chaveAcesso)
+                                val savedHash = preferencesManager.coordenadorChave ?: ""
+                                val updatedCoord = if (savedHash.isNotBlank()) repository.loginCoordenador(savedHash) else null
                                 if (updatedCoord != null) {
                                     coordinator = updatedCoord
                                     selectedChurch = updatedCoord.igrejas.firstOrNull { it.id == selectedChurch?.id }
@@ -1061,23 +1014,23 @@ fun CoordenadorScreen(
                 // Schedule Cards by Day
                 if (isLoadingSchedule) {
                     item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 32.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                        }
+                        ScheduleLoadingFeedback(churchName = selectedChurch?.nome)
                     }
                 } else if (scheduleDays.isEmpty()) {
                     item {
-                        Text(
-                            text = if (showPastDays) "Nenhuma escalação encontrada." else "Nenhum dia futuro. Tente \"Ver passados\".",
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(vertical = 16.dp)
-                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 24.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = if (showPastDays) "Nenhuma escalação encontrada." else "Nenhum dia futuro. Tente \"Ver passados\".",
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 16.dp)
+                            )
+                        }
                     }
                 } else {
                     items(scheduleDays) { dia ->
@@ -1147,12 +1100,18 @@ fun CoordenadorScreen(
 
                                 // Postos List with inline click to edit
                                 dia.postos.forEachIndexed { index, posto ->
+                                    val postoInteractionSource = remember(posto.escalacaoId, posto.pessoaNome, posto.funcao) { MutableInteractionSource() }
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .clickable {
+                                            .pressScale(postoInteractionSource)
+                                            .clickable(
+                                                interactionSource = postoInteractionSource,
+                                                indication = null
+                                            ) {
                                                 editingPosto = posto
                                                 editedName = posto.pessoaNome
+                                                editDialogError = null
                                             }
                                             .padding(horizontal = 16.dp, vertical = 12.dp),
                                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1202,7 +1161,6 @@ fun CoordenadorScreen(
             }
         }
     }
-}
 
 /**
  * Tela de Bloqueio para a aba Coordenador.
@@ -1219,9 +1177,10 @@ private fun CoordenadorLockScreen(
     isDark: Boolean,
     isLockedOut: Boolean = false,
     remainingSeconds: Int = 0,
+    isLoading: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    var isPasswordVisible by remember { mutableStateOf(false) }
+    var isPasswordVisible by rememberSaveable { mutableStateOf(false) }
     val errorColors = getErrorColor(isDark)
 
     Column(
@@ -1271,7 +1230,7 @@ private fun CoordenadorLockScreen(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Digite a senha para desbloquear o painel de coordenação.",
+            text = "Digite seu código de acesso para entrar no painel de coordenação.",
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -1300,7 +1259,7 @@ private fun CoordenadorLockScreen(
                 modifier = Modifier.size(14.dp)
             )
             Text(
-                text = if (isOnline) "Online • Senha sincronizada" else "Offline • Validação local ativa",
+                text = if (isOnline) "Online • Acessos sincronizados" else "Offline • Validação local ativa",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
                 color = if (isOnline) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
@@ -1309,13 +1268,13 @@ private fun CoordenadorLockScreen(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Campo de texto para digitar a senha
+        // Campo de texto para digitar o código de acesso
         OutlinedTextField(
             value = passwordInput,
             onValueChange = onPasswordChange,
-            enabled = !isLockedOut,
-            placeholder = { Text(if (isLockedOut) "Aguarde o desbloqueio..." else "Digite a senha") },
-            label = { Text("Senha") },
+            enabled = !isLockedOut && !isLoading,
+            placeholder = { Text(if (isLockedOut) "Aguarde o desbloqueio..." else "Código de acesso") },
+            label = { Text("Código de acesso") },
             leadingIcon = {
                 Icon(
                     imageVector = Icons.Default.Key,
@@ -1324,20 +1283,21 @@ private fun CoordenadorLockScreen(
                 )
             },
             trailingIcon = {
-                IconButton(onClick = { isPasswordVisible = !isPasswordVisible }, enabled = !isLockedOut) {
+                IconButton(onClick = { isPasswordVisible = !isPasswordVisible }, enabled = !isLockedOut && !isLoading) {
                     Icon(
                         imageVector = if (isPasswordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                        contentDescription = if (isPasswordVisible) "Ocultar senha" else "Exibir senha",
+                        contentDescription = if (isPasswordVisible) "Ocultar código" else "Exibir código",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             },
             visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Password,
+                capitalization = KeyboardCapitalization.Characters,
+                keyboardType = KeyboardType.Ascii,
                 imeAction = ImeAction.Done
             ),
-            keyboardActions = KeyboardActions(onDone = { if (!isLockedOut) onLoginClick() }),
+            keyboardActions = KeyboardActions(onDone = { if (!isLockedOut && !isLoading) onLoginClick() }),
             singleLine = true,
             shape = RoundedCornerShape(12.dp),
             colors = OutlinedTextFieldDefaults.colors(
@@ -1376,7 +1336,7 @@ private fun CoordenadorLockScreen(
         // Botão 'Entrar'
         Button(
             onClick = onLoginClick,
-            enabled = !isLockedOut,
+            enabled = !isLockedOut && !isLoading && passwordInput.isNotBlank(),
             shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.primary,
@@ -1389,11 +1349,19 @@ private fun CoordenadorLockScreen(
                 .height(50.dp)
                 .testTag("lock_login_button")
         ) {
-            Text(
-                text = if (isLockedOut) "Aguarde (${remainingSeconds}s)" else "Entrar",
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold
-            )
+            if (isLoading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    strokeWidth = 2.dp
+                )
+            } else {
+                Text(
+                    text = if (isLockedOut) "Aguarde (${remainingSeconds}s)" else "Entrar",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(20.dp))
@@ -1407,3 +1375,99 @@ private fun CoordenadorLockScreen(
         )
     }
 }
+
+@Composable
+private fun ScheduleLoadingFeedback(churchName: String? = null) {
+    val transition = rememberInfiniteTransition(label = "skeleton_shimmer")
+    val alpha by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.8f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 800, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "skeleton_alpha"
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 12.dp)
+            .testTag("schedule_loading_indicator"),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Indicador centralizado com status
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(22.dp),
+                strokeWidth = 2.5.dp,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = if (!churchName.isNullOrBlank()) "Carregando escala de $churchName..." else "Carregando escala litúrgica...",
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.Medium
+            )
+        }
+
+        // Cartões Skeleton simulando os dias e postos litúrgicos
+        repeat(2) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(
+                        1.dp,
+                        MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                        RoundedCornerShape(12.dp)
+                    )
+            ) {
+                Column {
+                    // Header simulado do dia
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp)
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = alpha))
+                    )
+                    // Linhas simuladas dos postos
+                    repeat(3) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .width(80.dp)
+                                    .height(14.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha * 0.3f))
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .width(120.dp)
+                                    .height(14.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = alpha * 0.4f))
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

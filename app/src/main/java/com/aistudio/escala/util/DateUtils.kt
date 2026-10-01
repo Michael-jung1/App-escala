@@ -1,10 +1,13 @@
 package com.aistudio.escala.util
 
+import java.time.DateTimeException
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 object DateUtils {
+    private val REGEX_DIA = Regex("""\b(\d{1,2})\b""")
+
     private val MESES_PT = mapOf(
         "janeiro" to 1, "fevereiro" to 2, "março" to 3, "marco" to 3, "abril" to 4,
         "maio" to 5, "junho" to 6, "julho" to 7, "agosto" to 8, "setembro" to 9,
@@ -41,11 +44,15 @@ object DateUtils {
     fun converterDataServico(dataServico: String, referenciaPeriodo: String): LocalDate? {
         val mesAno = extrairMesAno(referenciaPeriodo) ?: return null
         val (mes, ano) = mesAno
-        val numeros = dataServico.filter { it.isDigit() }
-        if (numeros.isEmpty()) return null
-        val dia = numeros.toIntOrNull() ?: return null
+        val primeiroNumero = Regex("""\b(\d{1,2})\b""").find(dataServico)?.value
+        val dia = primeiroNumero?.toIntOrNull() ?: return null
+
+        if (dia !in 1..31) return null
+
         return try {
             LocalDate.of(ano, mes, dia)
+        } catch (e: DateTimeException) {
+            null
         } catch (e: Exception) {
             null
         }

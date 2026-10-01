@@ -1,6 +1,8 @@
 package com.aistudio.escala.ui.screens
 
 import android.net.Uri
+import android.util.Log
+import com.aistudio.escala.util.traduzirErroImportacao
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -63,6 +65,7 @@ import com.aistudio.escala.data.EscalaRepository
 import com.aistudio.escala.data.ImportResult
 import com.aistudio.escala.data.ParsedEscala
 import com.aistudio.escala.parser.EscalaDocumentManager
+import com.aistudio.escala.parser.GeminiScheduleParser
 import com.aistudio.escala.ui.components.PreviewEscalaDialog
 import com.aistudio.escala.ui.theme.getErrorColor
 import com.aistudio.escala.ui.theme.getSuccessColor
@@ -92,6 +95,12 @@ fun ImportarEscalaScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
+            val fileSize = GeminiScheduleParser.getFileSize(context, uri)
+            if (fileSize > GeminiScheduleParser.MAX_FILE_SIZE_BYTES) {
+                errorMessage = GeminiScheduleParser.ERROR_FILE_TOO_LARGE
+                return@rememberLauncherForActivityResult
+            }
+
             isProcessing = true
             errorMessage = null
             processingStep = "Lendo e processando arquivo..."
@@ -103,8 +112,9 @@ fun ImportarEscalaScreen(
                     editedPeriodo = result.periodo
                     isProcessing = false
                 } catch (e: Exception) {
+                    Log.e("ImportarEscalaScreen", "Erro ao processar arquivo: ${e.message}", e)
                     isProcessing = false
-                    errorMessage = e.message ?: "Não foi possível processar o arquivo. Verifique o formato."
+                    errorMessage = traduzirErroImportacao(e)
                 }
             }
         }
@@ -114,6 +124,12 @@ fun ImportarEscalaScreen(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
+            val fileSize = GeminiScheduleParser.getFileSize(context, uri)
+            if (fileSize > GeminiScheduleParser.MAX_FILE_SIZE_BYTES) {
+                errorMessage = GeminiScheduleParser.ERROR_FILE_TOO_LARGE
+                return@rememberLauncherForActivityResult
+            }
+
             isProcessing = true
             errorMessage = null
             processingStep = "Lendo e processando arquivo..."
@@ -125,8 +141,9 @@ fun ImportarEscalaScreen(
                     editedPeriodo = result.periodo
                     isProcessing = false
                 } catch (e: Exception) {
+                    Log.e("ImportarEscalaScreen", "Erro ao processar arquivo no fallback picker: ${e.message}", e)
                     isProcessing = false
-                    errorMessage = e.message ?: "Não foi possível processar o arquivo. Verifique o formato."
+                    errorMessage = traduzirErroImportacao(e)
                 }
             }
         }
@@ -488,8 +505,9 @@ fun ImportarEscalaScreen(
                             }
                         }
                     } catch (e: Exception) {
+                        Log.e("ImportarEscalaScreen", "Erro ao salvar escala no banco: ${e.message}", e)
                         isProcessing = false
-                        errorMessage = "Erro ao salvar escala: ${e.message}"
+                        errorMessage = traduzirErroImportacao(e)
                     }
                 }
             }
