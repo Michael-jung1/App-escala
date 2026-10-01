@@ -1,6 +1,7 @@
 package com.aistudio.escala.data
 
 import android.content.Context
+import java.time.LocalDate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -70,6 +71,15 @@ class EscalaRepository(context: Context) {
 
     suspend fun atualizarEscalacao(escalacaoId: Long, novoNome: String, coordenadorId: Long): Boolean = withContext(Dispatchers.IO) {
         dbHelper.atualizarEscalacao(escalacaoId, novoNome, coordenadorId)
+    }
+
+    suspend fun verificarOutrasEscalacoesNaData(
+        nome: String,
+        dataServico: LocalDate,
+        igrejaId: Long,
+        escalacaoIdAtual: Long? = null
+    ): List<String> = withContext(Dispatchers.IO) {
+        dbHelper.verificarOutrasEscalacoesNaData(nome, dataServico, igrejaId, escalacaoIdAtual)
     }
 
     suspend fun getPeriodos(): List<String> = withContext(Dispatchers.IO) {

@@ -10,6 +10,7 @@ data class Igreja(
 )
 
 data class EscalacaoPessoa(
+    val escalacaoId: Long = 0L,
     val igreja: String,
     val funcao: String,
     val data: String,
@@ -39,6 +40,7 @@ data class PostoItem(
 )
 
 data class DiaComPostos(
+    val id: Long = 0L,
     val dataServico: String,
     val dataReal: String?,
     val localDate: LocalDate?,
@@ -87,7 +89,8 @@ sealed class ImportResult {
         val periodo: String,
         val totalIgrejas: Int,
         val totalEscalacoes: Int,
-        val totalPostos: Int
+        val totalPostos: Int,
+        val avisosConflito: List<String> = emptyList()
     ) : ImportResult()
 
     data class Error(val message: String) : ImportResult()

@@ -286,6 +286,7 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
         val cursor = db.rawQuery(
             """
             SELECT
+                escalacao.id AS escalacao_id,
                 igreja.nome AS igreja,
                 posto.funcao AS funcao,
                 escalacao.data_servico AS data,
@@ -302,10 +303,11 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
 
         cursor.use { c ->
             while (c.moveToNext()) {
-                val igreja = c.getString(0)
-                val funcao = c.getString(1)
-                val data = c.getString(2)
-                val periodo = c.getString(3)
+                val escalacaoId = c.getLong(0)
+                val igreja = c.getString(1)
+                val funcao = c.getString(2)
+                val data = c.getString(3)
+                val periodo = c.getString(4)
 
                 val localDate = DateUtils.converterDataServico(data, periodo)
                 val dataReal = localDate?.let { DateUtils.formatarISO(it.year, it.monthValue, it.dayOfMonth) }
@@ -316,6 +318,7 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
 
                 list.add(
                     EscalacaoPessoa(
+                        escalacaoId = escalacaoId,
                         igreja = igreja,
                         funcao = funcao,
                         data = data,
@@ -333,6 +336,7 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
             val cursorAll = db.rawQuery(
                 """
                 SELECT
+                    escalacao.id AS escalacao_id,
                     igreja.nome AS igreja,
                     posto.funcao AS funcao,
                     escalacao.data_servico AS data,
@@ -348,12 +352,13 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
 
             cursorAll.use { c ->
                 while (c.moveToNext()) {
-                    val pessoaNome = c.getString(4)
+                    val pessoaNome = c.getString(5)
                     if (SearchUtils.correspondeBusca(pessoaNome, trimmed)) {
-                        val igreja = c.getString(0)
-                        val funcao = c.getString(1)
-                        val data = c.getString(2)
-                        val periodo = c.getString(3)
+                        val escalacaoId = c.getLong(0)
+                        val igreja = c.getString(1)
+                        val funcao = c.getString(2)
+                        val data = c.getString(3)
+                        val periodo = c.getString(4)
 
                         val localDate = DateUtils.converterDataServico(data, periodo)
                         val dataReal = localDate?.let { DateUtils.formatarISO(it.year, it.monthValue, it.dayOfMonth) }
@@ -364,6 +369,7 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
 
                         list.add(
                             EscalacaoPessoa(
+                                escalacaoId = escalacaoId,
                                 igreja = igreja,
                                 funcao = funcao,
                                 data = data,
@@ -722,7 +728,9 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
 
         val resultado = mapaDias.map { (dataTexto, postos) ->
             val (dataReal, localDate) = mapaDatasReais[dataTexto] ?: Pair(null, null)
+            val diaId = postos.firstOrNull()?.escalacaoId ?: 0L
             DiaComPostos(
+                id = diaId,
                 dataServico = dataTexto,
                 dataReal = dataReal,
                 localDate = localDate,
@@ -796,6 +804,78 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
         return list
     }
 
+    /**
+     * Consulta a tabela escalacao (via JOIN com posto -> periodo_escala -> igreja) e retorna
+     * os nomes dos OUTROS postos/funções em que a mesma pessoa (comparação normalizada, sem acento
+     * e case-insensitive, reaproveitando SearchUtils.normalizarTexto) já está escalada na mesma data
+     * e mesma igreja, excluindo o próprio registro sendo editado (escalacaoIdAtual).
+     */
+    fun verificarOutrasEscalacoesNaData(
+        nome: String,
+        dataServico: LocalDate,
+        igrejaId: Long,
+        escalacaoIdAtual: Long? = null
+    ): List<String> {
+        val normAlvo = SearchUtils.normalizarTexto(nome)
+        if (normAlvo.isBlank() || igrejaId <= 0) return emptyList()
+
+        val db = readableDatabase
+        val funcoes = mutableListOf<String>()
+
+        val query = """
+            SELECT
+                e.id,
+                p.funcao,
+                e.data_servico,
+                pe.referencia,
+                e.pessoa_nome
+            FROM escalacao e
+            JOIN posto p ON p.id = e.posto_id
+            JOIN periodo_escala pe ON pe.id = p.periodo_escala_id
+            WHERE pe.igreja_id = ?
+        """.trimIndent()
+
+        try {
+            val cursor = db.rawQuery(query, arrayOf(igrejaId.toString()))
+            cursor.use { c ->
+                while (c.moveToNext()) {
+                    val escalacaoId = c.getLong(0)
+                    if (escalacaoIdAtual != null && escalacaoId == escalacaoIdAtual) {
+                        continue
+                    }
+
+                    val pessoaNome = c.getString(4) ?: ""
+                    val normPessoa = SearchUtils.normalizarTexto(pessoaNome)
+                    if (normPessoa == normAlvo) {
+                        val dataTexto = c.getString(2) ?: ""
+                        val periodoRef = c.getString(3) ?: ""
+                        val rowDate = DateUtils.converterDataServico(dataTexto, periodoRef)
+
+                        val matchesDate = if (rowDate != null) {
+                            rowDate == dataServico
+                        } else {
+                            val diaAlvoStr = dataServico.dayOfMonth.toString()
+                            val diaAlvoZero = diaAlvoStr.padStart(2, '0')
+                            Regex("""\b(0?$diaAlvoStr|$diaAlvoZero)\b""").containsMatchIn(dataTexto)
+                        }
+
+                        if (matchesDate) {
+                            val funcao = c.getString(1) ?: ""
+                            val funcaoNormalizada = DateUtils.normalizarFuncao(funcao)
+                            if (funcaoNormalizada.isNotBlank()) {
+                                funcoes.add(funcaoNormalizada)
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro ao verificar outras escalações para $nome na data $dataServico", e)
+        }
+
+        return funcoes.distinct()
+    }
+
     fun importarEscalaCompleta(resultado: ParsedEscala): ImportResult {
         val periodoSanitizado = sanitizeInput(resultado.periodo, MAX_PERIODO_LENGTH)
         if (periodoSanitizado.isEmpty()) {
@@ -808,6 +888,7 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
             var totalEscalacoes = 0
             var totalIgrejas = 0
             var totalPostos = 0
+            val avisosConflitos = mutableListOf<String>()
 
             for (igrejaParsed in resultado.igrejas) {
                 val nomeIgreja = sanitizeInput(igrejaParsed.nome, MAX_IGREJA_LENGTH)
@@ -895,6 +976,8 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
 
                 // 3. Inserir postos e escalações
                 var ordem = 1
+                val mapaEscalasIgreja = mutableMapOf<Pair<String, String>, MutableList<String>>()
+
                 for (postoParsed in igrejaParsed.postos) {
                     val funcaoSanitizada = sanitizeInput(DateUtils.normalizarFuncao(postoParsed.funcao), MAX_FUNCAO_LENGTH)
                     if (funcaoSanitizada.isEmpty()) continue
@@ -913,6 +996,22 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
                         val dataServico = sanitizeInput(esc.data, MAX_DATA_LENGTH)
                         if (pessoa.isEmpty() || dataServico.isEmpty()) continue
 
+                        // Checagem de escala duplicada no mesmo dia e mesma igreja
+                        val normPessoa = SearchUtils.normalizarTexto(pessoa)
+                        val normData = SearchUtils.normalizarTexto(dataServico)
+                        if (normPessoa.isNotBlank() && normData.isNotBlank()) {
+                            val key = Pair(normPessoa, normData)
+                            val funcoesJaEscaladas = mapaEscalasIgreja.getOrPut(key) { mutableListOf() }
+                            if (funcoesJaEscaladas.isNotEmpty() && !funcoesJaEscaladas.contains(funcaoSanitizada)) {
+                                val aviso = "$pessoa já está escalado(a) em ${funcoesJaEscaladas.joinToString(", ")} neste mesmo dia ($dataServico - $nomeIgreja)"
+                                Log.w(TAG, "Aviso de escala duplicada na importação: $aviso")
+                                avisosConflitos.add(aviso)
+                            }
+                            if (!funcoesJaEscaladas.contains(funcaoSanitizada)) {
+                                funcoesJaEscaladas.add(funcaoSanitizada)
+                            }
+                        }
+
                         val cvEsc = ContentValues().apply {
                             put("posto_id", postoId)
                             put("data_servico", dataServico)
@@ -929,7 +1028,8 @@ class DatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, D
                 periodo = periodoSanitizado,
                 totalIgrejas = totalIgrejas,
                 totalEscalacoes = totalEscalacoes,
-                totalPostos = totalPostos
+                totalPostos = totalPostos,
+                avisosConflito = avisosConflitos.distinct()
             )
         } catch (e: Exception) {
             Log.e(TAG, "Erro interno ao importar escala no SQLite", e)

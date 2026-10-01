@@ -3,6 +3,7 @@ package com.aistudio.escala
 import com.aistudio.escala.data.DatabaseHelper
 import com.aistudio.escala.util.CoordenadorLockoutManager
 import com.aistudio.escala.util.DateUtils
+import com.aistudio.escala.util.SearchUtils
 import com.aistudio.escala.util.SecurityUtils
 import java.time.LocalDate
 import okhttp3.ResponseBody.Companion.toResponseBody
@@ -372,5 +373,43 @@ class SecurityAndValidationTest {
             if (it.isLowerCase()) it.titlecase(java.util.Locale("pt", "BR")) else it.toString()
         }
         assertEquals("Outubro de 2026", periodo)
+    }
+
+    @Test
+    fun testNormalizacaoNomeParaConflitos() {
+        val n1 = "João da Silva"
+        val n2 = "joao da silva"
+        val n3 = "JOÃO DA SILVA"
+        val n4 = "  Joao   da   Silva  "
+
+        val norm1 = SearchUtils.normalizarTexto(n1)
+        val norm2 = SearchUtils.normalizarTexto(n2)
+        val norm3 = SearchUtils.normalizarTexto(n3)
+
+        assertEquals("joao da silva", norm1)
+        assertEquals(norm1, norm2)
+        assertEquals(norm1, norm3)
+    }
+
+    @Test
+    fun testImportResultSuccess_comAvisosConflito() {
+        val resultSemAvisos = com.aistudio.escala.data.ImportResult.Success(
+            periodo = "Outubro de 2026",
+            totalIgrejas = 1,
+            totalEscalacoes = 10,
+            totalPostos = 5
+        )
+        assertTrue(resultSemAvisos.avisosConflito.isEmpty())
+
+        val avisos = listOf("Carlos já está escalado em Recepção no dia Domingo 04 (Matriz)")
+        val resultComAvisos = com.aistudio.escala.data.ImportResult.Success(
+            periodo = "Outubro de 2026",
+            totalIgrejas = 1,
+            totalEscalacoes = 10,
+            totalPostos = 5,
+            avisosConflito = avisos
+        )
+        assertEquals(1, resultComAvisos.avisosConflito.size)
+        assertEquals("Carlos já está escalado em Recepção no dia Domingo 04 (Matriz)", resultComAvisos.avisosConflito.first())
     }
 }

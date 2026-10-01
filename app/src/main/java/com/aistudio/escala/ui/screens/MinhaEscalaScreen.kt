@@ -699,7 +699,7 @@ fun MinhaEscalaScreen(
                     }
                 } else {
                     // Duties list with Rule 2 applied
-                    items(listToShow) { item ->
+                    items(listToShow, key = { it.escalacaoId }) { item ->
                         val isPast = DateUtils.isDataPassada(item.localDate, today)
                         val isDutyToday = item.localDate == today
                         val churchColor = getChurchColor(item.igreja, isDark = isDark)

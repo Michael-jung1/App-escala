@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.runtime.key
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -552,7 +553,7 @@ fun EscalaDoDiaScreen(
                         .filter { churchesWhereUserServes.contains(it.igreja) }
                         .groupBy { it.igreja }
 
-                    items(fullDutiesByChurch.keys.toList()) { churchName ->
+                    items(fullDutiesByChurch.keys.toList(), key = { it }) { churchName ->
                         val churchDuties = fullDutiesByChurch[churchName] ?: emptyList()
                         val isCollapsed = collapsedChurches.contains(churchName)
 
@@ -634,7 +635,8 @@ fun EscalaDoDiaScreen(
                                     Column {
                                         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
                                         churchDuties.forEachIndexed { index, duty ->
-                                            val isPersonHighlighted = SearchUtils.correspondeBusca(duty.pessoa, activeUser)
+                                            key(duty.escalacaoId) {
+                                                val isPersonHighlighted = SearchUtils.correspondeBusca(duty.pessoa, activeUser)
 
                                             Row(
                                                 modifier = Modifier
@@ -707,6 +709,7 @@ fun EscalaDoDiaScreen(
                                                     modifier = Modifier.padding(horizontal = 12.dp)
                                                 )
                                             }
+                                            }
                                         }
                                     }
                                 }
@@ -772,7 +775,7 @@ fun EscalaDoDiaScreen(
                             .filter { fallbackChurchesWhereUserServes.contains(it.igreja) }
                             .groupBy { it.igreja }
 
-                        items(fullFallbackDutiesByChurch.keys.toList()) { churchName ->
+                        items(fullFallbackDutiesByChurch.keys.toList(), key = { it }) { churchName ->
                             val churchDuties = fullFallbackDutiesByChurch[churchName] ?: emptyList()
                             val isCollapsed = collapsedChurches.contains("fallback_$churchName")
 
@@ -848,7 +851,8 @@ fun EscalaDoDiaScreen(
                                         Column {
                                             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
                                             churchDuties.forEachIndexed { index, duty ->
-                                                val isPersonHighlighted = SearchUtils.correspondeBusca(duty.pessoa, activeUser)
+                                                key(duty.escalacaoId) {
+                                                    val isPersonHighlighted = SearchUtils.correspondeBusca(duty.pessoa, activeUser)
 
                                                 Row(
                                                     modifier = Modifier
@@ -915,6 +919,7 @@ fun EscalaDoDiaScreen(
                                                         modifier = Modifier.padding(horizontal = 12.dp)
                                                     )
                                                 }
+                                                }
                                             }
                                         }
                                     }
@@ -950,7 +955,7 @@ fun EscalaDoDiaScreen(
                             )
                         }
                     } else {
-                        items(filteredChurches.toList()) { churchName ->
+                        items(filteredChurches.toList(), key = { it }) { churchName ->
                             val churchDuties = groupedByChurch[churchName] ?: emptyList()
                             val isCollapsed = collapsedChurches.contains(churchName)
 
@@ -1031,7 +1036,8 @@ fun EscalaDoDiaScreen(
                                         Column {
                                             HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                                             churchDuties.forEachIndexed { index, duty ->
-                                                Row(
+                                                key(duty.escalacaoId) {
+                                                    Row(
                                                     modifier = Modifier
                                                         .fillMaxWidth()
                                                         .padding(horizontal = 16.dp, vertical = 10.dp),
@@ -1057,6 +1063,7 @@ fun EscalaDoDiaScreen(
                                                         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
                                                         modifier = Modifier.padding(horizontal = 16.dp)
                                                     )
+                                                }
                                                 }
                                             }
                                         }

@@ -53,8 +53,11 @@ import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.WifiOff
+import androidx.compose.runtime.key
+import java.time.LocalDate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -242,8 +245,11 @@ fun CoordenadorScreen(
     var isLoadingSchedule by remember { mutableStateOf(false) }
 
     var editingPosto by rememberSaveable(stateSaver = NullablePostoItemSaver) { mutableStateOf<PostoItem?>(null) }
+    var editingDia by remember { mutableStateOf<DiaComPostos?>(null) }
     var editedName by rememberSaveable { mutableStateOf("") }
     var editDialogError by remember { mutableStateOf<String?>(null) }
+    var conflictWarningPostos by remember { mutableStateOf<List<String>?>(null) }
+    var isCheckingConflict by remember { mutableStateOf(false) }
     var saveSuccessMessage by remember { mutableStateOf<String?>(null) }
 
     // Estados do Gerenciamento de Acessos (Apenas Administrador)
@@ -393,7 +399,7 @@ fun CoordenadorScreen(
         }
     }
 
-    fun saveEditedName() {
+    fun saveEditedName(forceSave: Boolean = false) {
         val target = editingPosto ?: return
         val newName = editedName.trim()
         if (newName.isEmpty()) {
@@ -407,12 +413,32 @@ fun CoordenadorScreen(
             return
         }
 
+        val churchId = selectedChurch?.id ?: -1L
+        val dataServico = editingDia?.localDate ?: LocalDate.now()
+
         coroutineScope.launch {
+            if (!forceSave && churchId > 0L) {
+                isCheckingConflict = true
+                val conflitos = repository.verificarOutrasEscalacoesNaData(
+                    nome = newName,
+                    dataServico = dataServico,
+                    igrejaId = churchId,
+                    escalacaoIdAtual = target.escalacaoId
+                )
+                isCheckingConflict = false
+                if (conflitos.isNotEmpty()) {
+                    conflictWarningPostos = conflitos
+                    return@launch
+                }
+            }
+
             val success = repository.atualizarEscalacao(target.escalacaoId, newName, coordId)
             if (success) {
                 saveSuccessMessage = "Alteração salva com sucesso!"
                 editingPosto = null
+                editingDia = null
                 editDialogError = null
+                conflictWarningPostos = null
                 // Refresh list
                 selectedChurch?.let { loadChurchSchedule(it.id, showPastDays) }
                 delay(3000)
@@ -428,7 +454,9 @@ fun CoordenadorScreen(
         AlertDialog(
             onDismissRequest = {
                 editingPosto = null
+                editingDia = null
                 editDialogError = null
+                conflictWarningPostos = null
             },
             title = {
                 Text(
@@ -475,20 +503,83 @@ fun CoordenadorScreen(
             confirmButton = {
                 Button(
                     onClick = { saveEditedName() },
+                    enabled = !isCheckingConflict,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary
                     ),
                     modifier = Modifier.testTag("save_person_name_button")
                 ) {
-                    Text("Salvar")
+                    if (isCheckingConflict) {
+                        CircularProgressIndicator(
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("Salvar")
+                    }
                 }
             },
             dismissButton = {
                 TextButton(onClick = {
                     editingPosto = null
+                    editingDia = null
                     editDialogError = null
+                    conflictWarningPostos = null
                 }) {
+                    Text("Cancelar")
+                }
+            }
+        )
+    }
+
+    // Diálogo de aviso de escala duplicada no mesmo dia (Aviso não bloqueante)
+    if (conflictWarningPostos != null) {
+        val funcoesTexto = conflictWarningPostos!!.joinToString(", ")
+        val nomePessoa = editedName.trim()
+        AlertDialog(
+            onDismissRequest = {
+                // Cancela apenas o aviso; mantém o diálogo de edição aberto com o texto preservado
+                conflictWarningPostos = null
+            },
+            title = {
+                Text(
+                    text = "Aviso de escala no mesmo dia",
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Serif
+                )
+            },
+            text = {
+                Text(
+                    text = "$nomePessoa já está escalado(a) em $funcoesTexto neste mesmo dia. Deseja confirmar mesmo assim?",
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        conflictWarningPostos = null
+                        saveEditedName(forceSave = true)
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    ),
+                    modifier = Modifier.testTag("confirm_conflict_save_button")
+                ) {
+                    Text("Confirmar mesmo assim")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = {
+                        // Cancela apenas o aviso; mantém o diálogo de edição aberto sem perder o que foi escrito
+                        conflictWarningPostos = null
+                    },
+                    modifier = Modifier.testTag("cancel_conflict_save_button")
+                ) {
                     Text("Cancelar")
                 }
             }
@@ -1033,7 +1124,7 @@ fun CoordenadorScreen(
                         }
                     }
                 } else {
-                    items(scheduleDays) { dia ->
+                    items(scheduleDays, key = { it.id }) { dia ->
                         val partes = dia.dataServico.split(" ")
                         val diaSemana = partes.getOrNull(0) ?: dia.dataServico
                         val numero = partes.getOrNull(1) ?: ""
@@ -1100,7 +1191,8 @@ fun CoordenadorScreen(
 
                                 // Postos List with inline click to edit
                                 dia.postos.forEachIndexed { index, posto ->
-                                    val postoInteractionSource = remember(posto.escalacaoId, posto.pessoaNome, posto.funcao) { MutableInteractionSource() }
+                                    key(posto.escalacaoId) {
+                                        val postoInteractionSource = remember(posto.escalacaoId, posto.pessoaNome, posto.funcao) { MutableInteractionSource() }
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -1109,9 +1201,11 @@ fun CoordenadorScreen(
                                                 interactionSource = postoInteractionSource,
                                                 indication = null
                                             ) {
+                                                editingDia = dia
                                                 editingPosto = posto
                                                 editedName = posto.pessoaNome
                                                 editDialogError = null
+                                                conflictWarningPostos = null
                                             }
                                             .padding(horizontal = 16.dp, vertical = 12.dp),
                                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1148,6 +1242,7 @@ fun CoordenadorScreen(
                                             color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
                                             modifier = Modifier.padding(horizontal = 16.dp)
                                         )
+                                    }
                                     }
                                 }
                             }
