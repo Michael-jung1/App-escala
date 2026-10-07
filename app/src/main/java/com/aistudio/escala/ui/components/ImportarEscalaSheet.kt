@@ -24,10 +24,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddPhotoAlternate
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Church
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -40,6 +44,8 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -92,38 +98,86 @@ fun ImportarEscalaCard(
 
     var isProcessing by remember { mutableStateOf(false) }
     var processingStep by remember { mutableStateOf("") }
-    var parsedEscala by remember { mutableStateOf<ParsedEscala?>(null) }
-    var editedPeriodo by remember { mutableStateOf("") }
+    var parsedEscalasList by remember { mutableStateOf<List<ParsedEscala>>(emptyList()) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var successResult by remember { mutableStateOf<ImportResult.Success?>(null) }
+
+    fun processarListaArquivos(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+
+        isProcessing = true
+        errorMessage = null
+        successResult = null
+
+        coroutineScope.launch {
+            val parsedList = mutableListOf<ParsedEscala>()
+            val erros = mutableListOf<String>()
+            val total = uris.size
+
+            for ((index, uri) in uris.withIndex()) {
+                val fileName = EscalaDocumentManager.obterNomeArquivo(context, uri)
+                processingStep = if (total > 1) {
+                    "Processando foto ${index + 1} de $total ($fileName)..."
+                } else {
+                    "Lendo e processando arquivo..."
+                }
+
+                val fileSize = GeminiScheduleParser.getFileSize(context, uri)
+                if (fileSize > GeminiScheduleParser.MAX_FILE_SIZE_BYTES) {
+                    erros.add("$fileName: ${GeminiScheduleParser.ERROR_FILE_TOO_LARGE}")
+                    continue
+                }
+
+                try {
+                    val result = EscalaDocumentManager.processarArquivo(context, uri)
+                    parsedList.add(result)
+                } catch (e: Exception) {
+                    Log.e("ImportarEscalaSheet", "Falha ao processar $fileName", e)
+                    erros.add("$fileName: ${traduzirErroImportacao(e)}")
+                }
+            }
+
+            isProcessing = false
+
+            if (parsedList.isNotEmpty()) {
+                parsedEscalasList = parsedList
+                if (erros.isNotEmpty()) {
+                    errorMessage = "Atenção: alguns arquivos não puderam ser lidos:\n" + erros.joinToString("\n")
+                }
+            } else {
+                errorMessage = if (erros.isNotEmpty()) {
+                    erros.joinToString("\n")
+                } else {
+                    "Nenhum arquivo pôde ser processado."
+                }
+            }
+        }
+    }
+
+    // Launcher for multiple document selection (Photos / multiple images)
+    val openMultipleDocumentsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            processarListaArquivos(uris)
+        }
+    }
+
+    // Fallback launcher for multiple contents
+    val getMultipleContentsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            processarListaArquivos(uris)
+        }
+    }
 
     // Launcher for file picker supporting all document formats via OpenDocument
     val openDocumentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
-            val fileSize = GeminiScheduleParser.getFileSize(context, uri)
-            if (fileSize > GeminiScheduleParser.MAX_FILE_SIZE_BYTES) {
-                errorMessage = GeminiScheduleParser.ERROR_FILE_TOO_LARGE
-                return@rememberLauncherForActivityResult
-            }
-
-            isProcessing = true
-            errorMessage = null
-            processingStep = "Lendo e processando arquivo..."
-
-            coroutineScope.launch {
-                try {
-                    val result = EscalaDocumentManager.processarArquivo(context, uri)
-                    parsedEscala = result
-                    editedPeriodo = result.periodo
-                    isProcessing = false
-                } catch (e: Exception) {
-                    Log.e("ImportarEscalaSheet", "Falha interna ao processar documento", e)
-                    isProcessing = false
-                    errorMessage = traduzirErroImportacao(e)
-                }
-            }
+            processarListaArquivos(listOf(uri))
         }
     }
 
@@ -132,28 +186,7 @@ fun ImportarEscalaCard(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
-            val fileSize = GeminiScheduleParser.getFileSize(context, uri)
-            if (fileSize > GeminiScheduleParser.MAX_FILE_SIZE_BYTES) {
-                errorMessage = GeminiScheduleParser.ERROR_FILE_TOO_LARGE
-                return@rememberLauncherForActivityResult
-            }
-
-            isProcessing = true
-            errorMessage = null
-            processingStep = "Lendo e processando arquivo..."
-
-            coroutineScope.launch {
-                try {
-                    val result = EscalaDocumentManager.processarArquivo(context, uri)
-                    parsedEscala = result
-                    editedPeriodo = result.periodo
-                    isProcessing = false
-                } catch (e: Exception) {
-                    Log.e("ImportarEscalaSheet", "Falha interna ao processar documento via fallback picker", e)
-                    isProcessing = false
-                    errorMessage = traduzirErroImportacao(e)
-                }
-            }
+            processarListaArquivos(listOf(uri))
         }
     }
 
@@ -172,28 +205,54 @@ fun ImportarEscalaCard(
                 "text/plain",
                 "text/comma-separated-values"
             )
+            "foto", "imagem" -> arrayOf(
+                "image/jpeg",
+                "image/png",
+                "image/webp"
+            )
             else -> arrayOf(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "application/vnd.ms-excel",
                 "application/pdf",
                 "text/plain",
                 "text/csv",
+                "image/jpeg",
+                "image/png",
+                "image/*",
                 "application/octet-stream",
                 "*/*"
             )
         }
 
-        try {
-            openDocumentLauncher.launch(mimeTypes)
-        } catch (_: Exception) {
-            getContentLauncher.launch(
-                when (specificMime) {
-                    "excel" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    "pdf" -> "application/pdf"
-                    "text" -> "text/*"
-                    else -> "*/*"
+        if (specificMime == "foto" || specificMime == "imagem") {
+            try {
+                openMultipleDocumentsLauncher.launch(mimeTypes)
+            } catch (_: Exception) {
+                try {
+                    getMultipleContentsLauncher.launch("image/*")
+                } catch (e: Exception) {
+                    Log.e("ImportarEscalaSheet", "Falha ao abrir seletor múltiplo de fotos", e)
+                    errorMessage = "Não foi possível abrir o seletor de fotos no dispositivo."
                 }
-            )
+            }
+        } else {
+            try {
+                openDocumentLauncher.launch(mimeTypes)
+            } catch (_: Exception) {
+                try {
+                    getContentLauncher.launch(
+                        when (specificMime) {
+                            "excel" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            "pdf" -> "application/pdf"
+                            "text" -> "text/*"
+                            else -> "*/*"
+                        }
+                    )
+                } catch (e: Exception) {
+                    Log.e("ImportarEscalaSheet", "Falha ao abrir seletor de documentos", e)
+                    errorMessage = "Não foi possível abrir o seletor de arquivos no dispositivo."
+                }
+            }
         }
     }
 
@@ -258,6 +317,12 @@ fun ImportarEscalaCard(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
+            FormatBadge(
+                label = "Fotos / Imagens",
+                icon = Icons.Filled.AddPhotoAlternate,
+                enabled = !isProcessing,
+                onClick = { launchFilePicker("foto") }
+            )
             FormatBadge(
                 label = "Excel (.xlsx)",
                 icon = Icons.Filled.TableChart,
@@ -427,39 +492,19 @@ fun ImportarEscalaCard(
         }
     }
 
-    // Confirmation & Preview Dialog
-    parsedEscala?.let { escala ->
-        PreviewEscalaDialog(
-            escala = escala,
-            initialPeriodo = editedPeriodo,
-            onDismiss = { parsedEscala = null },
-            onConfirm = { finalPeriodo ->
-                val finalEscala = escala.copy(periodo = finalPeriodo)
-                coroutineScope.launch {
-                    try {
-                        isProcessing = true
-                        processingStep = "Gravando dados no banco de dados..."
-                        parsedEscala = null
-                        val result = repository.importarEscala(finalEscala)
-                        isProcessing = false
-                        when (result) {
-                            is ImportResult.Success -> {
-                                successResult = result
-                                errorMessage = null
-                                onImportSuccess(result.periodo)
-                            }
-                            is ImportResult.Error -> {
-                                Log.e("ImportarEscalaSheet", "Erro ao gravar escala no banco: ${result.message}")
-                                errorMessage = "Não foi possível importar a escala agora. Tente novamente ou entre em contato com o suporte."
-                                successResult = null
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.e("ImportarEscalaSheet", "Erro ao gravar escala no banco de dados", e)
-                        isProcessing = false
-                        errorMessage = traduzirErroImportacao(e)
-                    }
-                }
+    // Confirmation & Preview Dialog (suporta importação individual ou lote de fotos por igreja)
+    if (parsedEscalasList.isNotEmpty()) {
+        PreviewMultiEscalaDialog(
+            escalasList = parsedEscalasList,
+            repository = repository,
+            onDismiss = { parsedEscalasList = emptyList() },
+            onItemSaved = { _, periodo, result ->
+                successResult = result
+                errorMessage = null
+                onImportSuccess(periodo)
+            },
+            onAllFinished = {
+                parsedEscalasList = emptyList()
             }
         )
     }
@@ -557,6 +602,45 @@ fun PreviewEscalaDialog(
                     StatPill(label = "Igrejas", value = escala.igrejas.size.toString())
                     StatPill(label = "Funções", value = totalPostos.toString())
                     StatPill(label = "Escalações", value = totalEscalacoes.toString())
+                }
+
+                if (escala.avisos.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f))
+                            .border(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                            .padding(10.dp)
+                    ) {
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Filled.Warning,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Avisos de leitura / baixa confiança (${escala.avisos.size}):",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            escala.avisos.forEach { aviso ->
+                                Text(
+                                    text = "• $aviso",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    modifier = Modifier.padding(vertical = 1.dp)
+                                )
+                            }
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -670,7 +754,7 @@ fun PreviewEscalaDialog(
 }
 
 @Composable
-private fun StatPill(label: String, value: String) {
+fun StatPill(label: String, value: String) {
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
@@ -692,4 +776,439 @@ private fun StatPill(label: String, value: String) {
             )
         }
     }
+}
+
+class ReviewItemState(
+    val escala: ParsedEscala,
+    initialPeriodo: String
+) {
+    var periodo by mutableStateOf(initialPeriodo)
+    var isSalvo by mutableStateOf(false)
+    var isSalvando by mutableStateOf(false)
+    var errorMessage by mutableStateOf<String?>(null)
+    var successResult by mutableStateOf<ImportResult.Success?>(null)
+    var isExpanded by mutableStateOf(true)
+}
+
+@Composable
+fun PreviewMultiEscalaDialog(
+    escalasList: List<ParsedEscala>,
+    repository: EscalaRepository,
+    onDismiss: () -> Unit,
+    onItemSaved: (ParsedEscala, String, ImportResult.Success) -> Unit = { _, _, _ -> },
+    onAllFinished: () -> Unit
+) {
+    val coroutineScope = rememberCoroutineScope()
+    val isDark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    val successColors = getSuccessColor(isDark)
+    val errorColors = getErrorColor(isDark)
+
+    val reviewItems = remember(escalasList) {
+        escalasList.map { escala ->
+            ReviewItemState(
+                escala = escala,
+                initialPeriodo = escala.periodo.ifBlank { "Escala Atual" }
+            )
+        }
+    }
+    var isSavingAll by remember { mutableStateOf(false) }
+
+    fun salvarItem(item: ReviewItemState) {
+        if (item.isSalvo || item.isSalvando) return
+        item.isSalvando = true
+        item.errorMessage = null
+        coroutineScope.launch {
+            try {
+                val finalPeriodo = item.periodo.trim().ifEmpty { "Escala Atual" }
+                val finalEscala = item.escala.copy(periodo = finalPeriodo)
+                val result = repository.importarEscala(finalEscala)
+                item.isSalvando = false
+                when (result) {
+                    is ImportResult.Success -> {
+                        item.isSalvo = true
+                        item.successResult = result
+                        onItemSaved(item.escala, finalPeriodo, result)
+                    }
+                    is ImportResult.Error -> {
+                        item.errorMessage = result.message
+                    }
+                }
+            } catch (e: Exception) {
+                item.isSalvando = false
+                item.errorMessage = traduzirErroImportacao(e)
+            }
+        }
+    }
+
+    fun salvarTodasPendentes() {
+        val pendentes = reviewItems.filter { !it.isSalvo }
+        if (pendentes.isEmpty()) return
+        isSavingAll = true
+        coroutineScope.launch {
+            for (item in pendentes) {
+                item.isSalvando = true
+                item.errorMessage = null
+                try {
+                    val finalPeriodo = item.periodo.trim().ifEmpty { "Escala Atual" }
+                    val finalEscala = item.escala.copy(periodo = finalPeriodo)
+                    val result = repository.importarEscala(finalEscala)
+                    item.isSalvando = false
+                    when (result) {
+                        is ImportResult.Success -> {
+                            item.isSalvo = true
+                            item.successResult = result
+                            onItemSaved(item.escala, finalPeriodo, result)
+                        }
+                        is ImportResult.Error -> {
+                            item.errorMessage = result.message
+                        }
+                    }
+                } catch (e: Exception) {
+                    item.isSalvando = false
+                    item.errorMessage = traduzirErroImportacao(e)
+                }
+            }
+            isSavingAll = false
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = {
+            if (reviewItems.any { it.isSalvo }) onAllFinished() else onDismiss()
+        },
+        modifier = Modifier.fillMaxWidth(0.96f),
+        title = {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = if (reviewItems.size > 1) Icons.Filled.AddPhotoAlternate else Icons.Filled.TableChart,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (reviewItems.size > 1) "Conferir Escalas (${reviewItems.size} fotos/igrejas)" else "Conferir Escala Detectada",
+                        fontFamily = FontFamily.Serif,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                }
+                Text(
+                    text = if (reviewItems.size > 1) {
+                        "Revise e confirme cada comunidade individualmente antes de salvar no banco:"
+                    } else {
+                        "Arquivo: ${reviewItems.firstOrNull()?.escala?.arquivoOrigem ?: ""}"
+                    },
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 460.dp)
+            ) {
+                LazyColumn(
+                    modifier = Modifier.weight(1f, fill = false),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    itemsIndexed(
+                        items = reviewItems,
+                        key = { index, item -> item.escala.arquivoOrigem + "_" + index }
+                    ) { index, item ->
+                        val churchName = item.escala.igrejas.firstOrNull()?.nome ?: "Comunidade"
+                        val totalEscalacoes = item.escala.igrejas.sumOf { ig -> ig.postos.sumOf { it.escalacoes.size } }
+                        val totalPostos = item.escala.igrejas.sumOf { it.postos.size }
+
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("card_preview_igreja_$index"),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (item.isSalvo) successColors.background.copy(alpha = 0.35f) else MaterialTheme.colorScheme.surface
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (item.isSalvo) successColors.border else MaterialTheme.colorScheme.outline
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Church,
+                                            contentDescription = null,
+                                            tint = if (item.isSalvo) successColors.text else MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = churchName,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 15.sp,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+
+                                    if (item.isSalvo) {
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(successColors.text.copy(alpha = 0.15f))
+                                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.CheckCircle,
+                                                    contentDescription = null,
+                                                    tint = successColors.text,
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text(
+                                                    text = "Salvo",
+                                                    color = successColors.text,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 11.sp
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        Text(
+                                            text = item.escala.arquivoOrigem,
+                                            fontSize = 10.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                if (item.isSalvo) {
+                                    Text(
+                                        text = "Escala de \"${item.periodo}\" gravada com sucesso! ${item.successResult?.totalEscalacoes ?: totalEscalacoes} escalações registradas.",
+                                        fontSize = 12.sp,
+                                        color = successColors.text,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    if (item.successResult?.avisosConflito?.isNotEmpty() == true) {
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            text = "Avisos de escalas no mesmo dia: ${item.successResult?.avisosConflito?.joinToString("; ")}",
+                                            fontSize = 10.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                } else {
+                                    OutlinedTextField(
+                                        value = item.periodo,
+                                        onValueChange = { item.periodo = it },
+                                        label = { Text("Mês / Período da Escala") },
+                                        supportingText = { Text("Ex: Outubro de 2026") },
+                                        singleLine = true,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("input_periodo_importado_$index")
+                                    )
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        StatPill(label = "Igrejas", value = item.escala.igrejas.size.toString())
+                                        StatPill(label = "Funções", value = totalPostos.toString())
+                                        StatPill(label = "Escalações", value = totalEscalacoes.toString())
+                                    }
+
+                                    if (item.escala.avisos.isNotEmpty()) {
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f))
+                                                .border(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                                                .padding(10.dp)
+                                        ) {
+                                            Column {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Warning,
+                                                        contentDescription = null,
+                                                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text(
+                                                        text = "Avisos de leitura / baixa confiança (${item.escala.avisos.size}):",
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontSize = 11.sp,
+                                                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                                                    )
+                                                }
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                item.escala.avisos.forEach { aviso ->
+                                                    Text(
+                                                        text = "• $aviso",
+                                                        fontSize = 11.sp,
+                                                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                                        modifier = Modifier.padding(vertical = 1.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .clickable { item.isExpanded = !item.isExpanded }
+                                            .padding(vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = if (item.isExpanded) "Ocultar detalhes da escala" else "Ver detalhes da escala (${totalPostos} funções)",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Icon(
+                                            imageVector = if (item.isExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+
+                                    AnimatedVisibility(visible = item.isExpanded) {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(top = 4.dp, bottom = 8.dp)
+                                        ) {
+                                            item.escala.igrejas.forEach { ig ->
+                                                Text(
+                                                    text = "Dias de serviço: ${ig.datas.joinToString(", ")}",
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Spacer(modifier = Modifier.height(2.dp))
+                                                Text(
+                                                    text = "Funções: ${ig.postos.map { it.funcao }.distinct().joinToString(", ")}",
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    if (item.errorMessage != null) {
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            text = item.errorMessage!!,
+                                            color = errorColors.text,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    Button(
+                                        onClick = { salvarItem(item) },
+                                        enabled = !item.isSalvando && !isSavingAll,
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.primary,
+                                            contentColor = MaterialTheme.colorScheme.onPrimary
+                                        ),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("btn_salvar_igreja_$index")
+                                    ) {
+                                        if (item.isSalvando) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(16.dp),
+                                                color = MaterialTheme.colorScheme.onPrimary,
+                                                strokeWidth = 2.dp
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("Gravando dados no banco...", fontSize = 13.sp)
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.Filled.Check,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                if (reviewItems.size > 1) "Confirmar e Salvar Esta Igreja" else "Confirmar e Salvar Escala",
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (reviewItems.all { it.isSalvo }) {
+                Button(
+                    onClick = onAllFinished,
+                    modifier = Modifier.testTag("btn_concluir_preview")
+                ) {
+                    Text("Concluir")
+                }
+            } else if (reviewItems.size > 1 && reviewItems.any { !it.isSalvo }) {
+                Button(
+                    onClick = { salvarTodasPendentes() },
+                    enabled = !isSavingAll,
+                    modifier = Modifier.testTag("btn_salvar_todas_pendentes")
+                ) {
+                    if (isSavingAll) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Gravando todas...", fontSize = 13.sp)
+                    } else {
+                        Text("Salvar Todas as Pendentes", fontSize = 13.sp)
+                    }
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = {
+                    if (reviewItems.any { it.isSalvo }) onAllFinished() else onDismiss()
+                },
+                modifier = Modifier.testTag("btn_cancelar_preview")
+            ) {
+                Text(if (reviewItems.any { it.isSalvo }) "Fechar" else "Cancelar")
+            }
+        }
+    )
 }

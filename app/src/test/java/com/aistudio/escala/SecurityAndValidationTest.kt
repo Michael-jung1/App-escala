@@ -1,6 +1,7 @@
 package com.aistudio.escala
 
 import com.aistudio.escala.data.DatabaseHelper
+import com.aistudio.escala.parser.GeminiScheduleParser
 import com.aistudio.escala.util.CoordenadorLockoutManager
 import com.aistudio.escala.util.DateUtils
 import com.aistudio.escala.util.SearchUtils
@@ -447,5 +448,59 @@ class SecurityAndValidationTest {
         }.minByOrNull { it.localDate!! }
 
         assertNull("Quando só existem escalas passadas, o fallback deve retornar null", futureDuty)
+    }
+
+    @Test
+    fun testGeminiScheduleParser_uncertaintyAndAvisos() {
+        val jsonMock = """
+            {
+              "periodo": "Outubro de 2026",
+              "avisos": [
+                "Célula 'Sineta 1' em Quarta 14 pode estar incorreta ou ilegível",
+                "Nome cortado na borda para Missal no dia 25"
+              ],
+              "igrejas": [
+                {
+                  "igreja": "São José",
+                  "titulo": "Escala Paroquial",
+                  "coordenadores": "Ana Paula",
+                  "datas": ["Domingo 04", "Quarta 14"],
+                  "postos": [
+                    {
+                      "funcao": "Missal",
+                      "escalacoes": [
+                        { "data": "Domingo 04", "pessoa": "Gabriel" },
+                        { "data": "Quarta 14", "pessoa": "" }
+                      ]
+                    },
+                    {
+                      "funcao": "Sineta 1",
+                      "escalacoes": [
+                        { "data": "Domingo 04", "pessoa": "---" },
+                        { "data": "Quarta 14", "pessoa": "null" }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val parsed = GeminiScheduleParser.parseJsonToEscala(jsonMock, "foto_escala_sao_jose.jpg")
+
+        assertEquals("Outubro de 2026", parsed.periodo)
+        assertEquals("foto_escala_sao_jose.jpg", parsed.arquivoOrigem)
+        assertEquals(2, parsed.avisos.size)
+        assertEquals("Célula 'Sineta 1' em Quarta 14 pode estar incorreta ou ilegível", parsed.avisos[0])
+        assertEquals("Nome cortado na borda para Missal no dia 25", parsed.avisos[1])
+
+        // Garante que células vazias, null ou com traços não foram transformadas em escalações fictícias
+        val postoMissal = parsed.igrejas[0].postos.first { it.funcao == "Missal" }
+        assertEquals(1, postoMissal.escalacoes.size)
+        assertEquals("Gabriel", postoMissal.escalacoes[0].pessoa)
+
+        // Posto Sineta 1 tinha apenas células com '---' e 'null', então não deve ter nenhuma escalação salva
+        val postosSineta = parsed.igrejas[0].postos.filter { it.funcao == "Sineta 1" }
+        assertTrue("Funções com células vazias/traços não devem ter escalações criadas", postosSineta.isEmpty())
     }
 }

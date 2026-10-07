@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
@@ -67,7 +68,7 @@ import com.aistudio.escala.data.ImportResult
 import com.aistudio.escala.data.ParsedEscala
 import com.aistudio.escala.parser.EscalaDocumentManager
 import com.aistudio.escala.parser.GeminiScheduleParser
-import com.aistudio.escala.ui.components.PreviewEscalaDialog
+import com.aistudio.escala.ui.components.PreviewMultiEscalaDialog
 import com.aistudio.escala.ui.theme.getErrorColor
 import com.aistudio.escala.ui.theme.getSuccessColor
 import kotlinx.coroutines.launch
@@ -87,66 +88,95 @@ fun ImportarEscalaScreen(
 
     var isProcessing by remember { mutableStateOf(false) }
     var processingStep by remember { mutableStateOf("") }
-    var parsedEscala by remember { mutableStateOf<ParsedEscala?>(null) }
-    var editedPeriodo by remember { mutableStateOf("") }
+    var parsedEscalasList by remember { mutableStateOf<List<ParsedEscala>>(emptyList()) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var successResult by remember { mutableStateOf<ImportResult.Success?>(null) }
 
-    val openDocumentLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            val fileSize = GeminiScheduleParser.getFileSize(context, uri)
-            if (fileSize > GeminiScheduleParser.MAX_FILE_SIZE_BYTES) {
-                errorMessage = GeminiScheduleParser.ERROR_FILE_TOO_LARGE
-                return@rememberLauncherForActivityResult
-            }
+    fun processarListaArquivos(uris: List<Uri>) {
+        if (uris.isEmpty()) return
 
-            isProcessing = true
-            errorMessage = null
-            processingStep = "Lendo e processando arquivo..."
+        isProcessing = true
+        errorMessage = null
+        successResult = null
 
-            coroutineScope.launch {
+        coroutineScope.launch {
+            val parsedList = mutableListOf<ParsedEscala>()
+            val erros = mutableListOf<String>()
+            val total = uris.size
+
+            for ((index, uri) in uris.withIndex()) {
+                val fileName = EscalaDocumentManager.obterNomeArquivo(context, uri)
+                processingStep = if (total > 1) {
+                    "Processando foto ${index + 1} de $total ($fileName)..."
+                } else {
+                    "Lendo e processando arquivo..."
+                }
+
+                val fileSize = GeminiScheduleParser.getFileSize(context, uri)
+                if (fileSize > GeminiScheduleParser.MAX_FILE_SIZE_BYTES) {
+                    erros.add("$fileName: ${GeminiScheduleParser.ERROR_FILE_TOO_LARGE}")
+                    continue
+                }
+
                 try {
                     val result = EscalaDocumentManager.processarArquivo(context, uri)
-                    parsedEscala = result
-                    editedPeriodo = result.periodo
-                    isProcessing = false
+                    parsedList.add(result)
                 } catch (e: Exception) {
-                    Log.e("ImportarEscalaScreen", "Erro ao processar arquivo: ${e.message}", e)
-                    isProcessing = false
-                    errorMessage = traduzirErroImportacao(e)
+                    Log.e("ImportarEscalaScreen", "Falha ao processar $fileName", e)
+                    erros.add("$fileName: ${traduzirErroImportacao(e)}")
+                }
+            }
+
+            isProcessing = false
+
+            if (parsedList.isNotEmpty()) {
+                parsedEscalasList = parsedList
+                if (erros.isNotEmpty()) {
+                    errorMessage = "Atenção: alguns arquivos não puderam ser lidos:\n" + erros.joinToString("\n")
+                }
+            } else {
+                errorMessage = if (erros.isNotEmpty()) {
+                    erros.joinToString("\n")
+                } else {
+                    "Nenhum arquivo pôde ser processado."
                 }
             }
         }
     }
 
+    // Launcher for multiple document selection (Photos / multiple images)
+    val openMultipleDocumentsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            processarListaArquivos(uris)
+        }
+    }
+
+    // Fallback launcher for multiple contents
+    val getMultipleContentsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            processarListaArquivos(uris)
+        }
+    }
+
+    // Launcher for file picker supporting all document formats via OpenDocument
+    val openDocumentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            processarListaArquivos(listOf(uri))
+        }
+    }
+
+    // Fallback getContent launcher
     val getContentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
-            val fileSize = GeminiScheduleParser.getFileSize(context, uri)
-            if (fileSize > GeminiScheduleParser.MAX_FILE_SIZE_BYTES) {
-                errorMessage = GeminiScheduleParser.ERROR_FILE_TOO_LARGE
-                return@rememberLauncherForActivityResult
-            }
-
-            isProcessing = true
-            errorMessage = null
-            processingStep = "Lendo e processando arquivo..."
-
-            coroutineScope.launch {
-                try {
-                    val result = EscalaDocumentManager.processarArquivo(context, uri)
-                    parsedEscala = result
-                    editedPeriodo = result.periodo
-                    isProcessing = false
-                } catch (e: Exception) {
-                    Log.e("ImportarEscalaScreen", "Erro ao processar arquivo no fallback picker: ${e.message}", e)
-                    isProcessing = false
-                    errorMessage = traduzirErroImportacao(e)
-                }
-            }
+            processarListaArquivos(listOf(uri))
         }
     }
 
@@ -154,7 +184,8 @@ fun ImportarEscalaScreen(
         val mimeTypes = when (specificMime) {
             "excel" -> arrayOf(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                "application/vnd.ms-excel"
+                "application/vnd.ms-excel",
+                "application/octet-stream"
             )
             "pdf" -> arrayOf(
                 "application/pdf"
@@ -164,28 +195,54 @@ fun ImportarEscalaScreen(
                 "text/plain",
                 "text/comma-separated-values"
             )
+            "foto", "imagem" -> arrayOf(
+                "image/jpeg",
+                "image/png",
+                "image/webp"
+            )
             else -> arrayOf(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "application/vnd.ms-excel",
                 "application/pdf",
                 "text/plain",
                 "text/csv",
+                "image/jpeg",
+                "image/png",
+                "image/*",
                 "application/octet-stream",
                 "*/*"
             )
         }
 
-        try {
-            openDocumentLauncher.launch(mimeTypes)
-        } catch (_: Exception) {
-            getContentLauncher.launch(
-                when (specificMime) {
-                    "excel" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    "pdf" -> "application/pdf"
-                    "text" -> "text/*"
-                    else -> "*/*"
+        if (specificMime == "foto" || specificMime == "imagem") {
+            try {
+                openMultipleDocumentsLauncher.launch(mimeTypes)
+            } catch (_: Exception) {
+                try {
+                    getMultipleContentsLauncher.launch("image/*")
+                } catch (e: Exception) {
+                    Log.e("ImportarEscalaScreen", "Falha ao abrir seletor múltiplo de fotos", e)
+                    errorMessage = "Não foi possível abrir o seletor de fotos no dispositivo."
                 }
-            )
+            }
+        } else {
+            try {
+                openDocumentLauncher.launch(mimeTypes)
+            } catch (_: Exception) {
+                try {
+                    getContentLauncher.launch(
+                        when (specificMime) {
+                            "excel" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            "pdf" -> "application/pdf"
+                            "text" -> "text/*"
+                            else -> "*/*"
+                        }
+                    )
+                } catch (e: Exception) {
+                    Log.e("ImportarEscalaScreen", "Falha ao abrir seletor de documentos", e)
+                    errorMessage = "Não foi possível abrir o seletor de arquivos no dispositivo."
+                }
+            }
         }
     }
 
@@ -259,7 +316,7 @@ fun ImportarEscalaScreen(
                     )
 
                     Text(
-                        text = "Suporte para planilhas Excel (.xlsx, .xls), documentos PDF (.pdf) e listas CSV/Texto (.txt)",
+                        text = "Suporte para fotos/imagens (.jpg, .png), planilhas Excel (.xlsx), documentos PDF (.pdf) e listas CSV/Texto (.txt)",
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
@@ -281,6 +338,12 @@ fun ImportarEscalaScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
+                        ImportFormatBadge(
+                            label = "Fotos / Imagens",
+                            icon = Icons.Filled.AddPhotoAlternate,
+                            enabled = !isProcessing,
+                            onClick = { launchFilePicker("foto") }
+                        )
                         ImportFormatBadge(
                             label = "Excel (.xlsx)",
                             icon = Icons.Filled.TableChart,
@@ -527,37 +590,19 @@ fun ImportarEscalaScreen(
         }
     }
 
-    // Confirmation & Preview Dialog
-    parsedEscala?.let { escala ->
-        PreviewEscalaDialog(
-            escala = escala,
-            initialPeriodo = editedPeriodo,
-            onDismiss = { parsedEscala = null },
-            onConfirm = { finalPeriodo ->
-                isProcessing = true
-                processingStep = "Salvando dados no aplicativo..."
-                coroutineScope.launch {
-                    try {
-                        val escalaToSave = if (finalPeriodo.isNotBlank()) escala.copy(periodo = finalPeriodo) else escala
-                        val result = repository.importarEscala(escalaToSave)
-                        when (result) {
-                            is ImportResult.Success -> {
-                                successResult = result
-                                parsedEscala = null
-                                isProcessing = false
-                                onImportSuccess(finalPeriodo)
-                            }
-                            is ImportResult.Error -> {
-                                isProcessing = false
-                                errorMessage = result.message
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.e("ImportarEscalaScreen", "Erro ao salvar escala no banco: ${e.message}", e)
-                        isProcessing = false
-                        errorMessage = traduzirErroImportacao(e)
-                    }
-                }
+    // Confirmation & Preview Dialog (suporta importação individual ou lote de fotos por igreja)
+    if (parsedEscalasList.isNotEmpty()) {
+        PreviewMultiEscalaDialog(
+            escalasList = parsedEscalasList,
+            repository = repository,
+            onDismiss = { parsedEscalasList = emptyList() },
+            onItemSaved = { _, periodo, result ->
+                successResult = result
+                errorMessage = null
+                onImportSuccess(periodo)
+            },
+            onAllFinished = {
+                parsedEscalasList = emptyList()
             }
         )
     }

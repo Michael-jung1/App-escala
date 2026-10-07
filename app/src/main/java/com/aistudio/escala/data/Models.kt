@@ -63,7 +63,8 @@ data class ValidacaoSenhaResult(
 data class ParsedEscala(
     val periodo: String,
     val arquivoOrigem: String,
-    val igrejas: List<ParsedIgreja>
+    val igrejas: List<ParsedIgreja>,
+    val avisos: List<String> = emptyList()
 )
 
 data class ParsedIgreja(
