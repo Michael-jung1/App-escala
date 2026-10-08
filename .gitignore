@@ -6,3 +6,12 @@ local.properties
 *.jks
 *.keystore
 .env
+.idea/
+app/release/
+*.apk
+/caches/
+/daemon/
+/native/
+/kotlin-profile/
+/wrapper/
+/android/
