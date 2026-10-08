@@ -2,6 +2,7 @@ package com.aistudio.escala.ui.components
 
 import android.net.Uri
 import android.util.Log
+import retrofit2.HttpException
 import com.aistudio.escala.util.traduzirErroImportacao
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -132,7 +133,12 @@ fun ImportarEscalaCard(
                     val result = EscalaDocumentManager.processarArquivo(context, uri)
                     parsedList.add(result)
                 } catch (e: Exception) {
-                    Log.e("ImportarEscalaSheet", "Falha ao processar $fileName", e)
+                    val httpCode = (e as? HttpException)?.code() ?: (e.cause as? HttpException)?.code()
+                    val httpBody = try {
+                        (e as? HttpException)?.response()?.errorBody()?.string()
+                            ?: (e.cause as? HttpException)?.response()?.errorBody()?.string()
+                    } catch (_: Throwable) { null }
+                    Log.e("ImportarEscalaSheet", "Falha técnica ao processar $fileName (HTTP $httpCode, body='$httpBody'): ${e.message}", e)
                     erros.add("$fileName: ${traduzirErroImportacao(e)}")
                 }
             }
@@ -834,6 +840,12 @@ fun PreviewMultiEscalaDialog(
                     }
                 }
             } catch (e: Exception) {
+                val httpCode = (e as? HttpException)?.code() ?: (e.cause as? HttpException)?.code()
+                val httpBody = try {
+                    (e as? HttpException)?.response()?.errorBody()?.string()
+                        ?: (e.cause as? HttpException)?.response()?.errorBody()?.string()
+                } catch (_: Throwable) { null }
+                Log.e("ImportarEscalaSheet", "Erro ao salvar escala (HTTP $httpCode, body='$httpBody'): ${e.message}", e)
                 item.isSalvando = false
                 item.errorMessage = traduzirErroImportacao(e)
             }
@@ -864,6 +876,12 @@ fun PreviewMultiEscalaDialog(
                         }
                     }
                 } catch (e: Exception) {
+                    val httpCode = (e as? HttpException)?.code() ?: (e.cause as? HttpException)?.code()
+                    val httpBody = try {
+                        (e as? HttpException)?.response()?.errorBody()?.string()
+                            ?: (e.cause as? HttpException)?.response()?.errorBody()?.string()
+                    } catch (_: Throwable) { null }
+                    Log.e("ImportarEscalaSheet", "Erro ao salvar escala em lote (HTTP $httpCode, body='$httpBody'): ${e.message}", e)
                     item.isSalvando = false
                     item.errorMessage = traduzirErroImportacao(e)
                 }

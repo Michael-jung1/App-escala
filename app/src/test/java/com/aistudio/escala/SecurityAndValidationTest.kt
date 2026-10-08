@@ -312,6 +312,41 @@ class SecurityAndValidationTest {
 
     @Test
     fun testTraduzirErroImportacao_mapeamentoHumanizado() {
+        // 0. Chave Gemini não configurada
+        val errApiKey1 = com.aistudio.escala.parser.GeminiApiKeyMissingException()
+        assertEquals(
+            "A importação por IA não está configurada neste aplicativo. Avise o desenvolvedor.",
+            com.aistudio.escala.util.ErrorUtils.traduzirErroImportacao(errApiKey1)
+        )
+        val errApiKey2 = IllegalStateException("Chave da API Gemini não configurada. Configure o segredo GEMINI_API_KEY no painel de Secrets")
+        assertEquals(
+            "A importação por IA não está configurada neste aplicativo. Avise o desenvolvedor.",
+            com.aistudio.escala.util.ErrorUtils.traduzirErroImportacao(errApiKey2)
+        )
+
+        // 0.1 HTTP 401 e 403 (Acesso recusado)
+        val resp401 = retrofit2.Response.error<Any>(401, "Unauthorized".toResponseBody(null))
+        val err401 = retrofit2.HttpException(resp401)
+        assertEquals(
+            "O serviço de leitura por IA recusou o acesso. Avise o desenvolvedor.",
+            com.aistudio.escala.util.ErrorUtils.traduzirErroImportacao(err401)
+        )
+
+        val resp403 = retrofit2.Response.error<Any>(403, "Forbidden".toResponseBody(null))
+        val err403 = retrofit2.HttpException(resp403)
+        assertEquals(
+            "O serviço de leitura por IA recusou o acesso. Avise o desenvolvedor.",
+            com.aistudio.escala.util.ErrorUtils.traduzirErroImportacao(err403)
+        )
+
+        // 0.2 HTTP 404 (Serviço indisponível)
+        val resp404 = retrofit2.Response.error<Any>(404, "Not Found".toResponseBody(null))
+        val err404 = retrofit2.HttpException(resp404)
+        assertEquals(
+            "O serviço de leitura por IA está indisponível no momento. Avise o desenvolvedor.",
+            com.aistudio.escala.util.ErrorUtils.traduzirErroImportacao(err404)
+        )
+
         // 1. Sem conexão
         val errHost1 = java.net.UnknownHostException("Unable to resolve host generativelanguage.googleapis.com")
         assertEquals(

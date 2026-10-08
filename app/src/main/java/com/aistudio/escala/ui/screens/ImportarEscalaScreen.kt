@@ -2,6 +2,7 @@ package com.aistudio.escala.ui.screens
 
 import android.net.Uri
 import android.util.Log
+import retrofit2.HttpException
 import com.aistudio.escala.util.traduzirErroImportacao
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -122,7 +123,12 @@ fun ImportarEscalaScreen(
                     val result = EscalaDocumentManager.processarArquivo(context, uri)
                     parsedList.add(result)
                 } catch (e: Exception) {
-                    Log.e("ImportarEscalaScreen", "Falha ao processar $fileName", e)
+                    val httpCode = (e as? HttpException)?.code() ?: (e.cause as? HttpException)?.code()
+                    val httpBody = try {
+                        (e as? HttpException)?.response()?.errorBody()?.string()
+                            ?: (e.cause as? HttpException)?.response()?.errorBody()?.string()
+                    } catch (_: Throwable) { null }
+                    Log.e("ImportarEscalaScreen", "Falha técnica ao processar $fileName (HTTP $httpCode, body='$httpBody'): ${e.message}", e)
                     erros.add("$fileName: ${traduzirErroImportacao(e)}")
                 }
             }

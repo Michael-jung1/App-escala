@@ -94,6 +94,10 @@ object GeminiClient {
     }
 }
 
+class GeminiApiKeyMissingException(
+    message: String = "Chave da API Gemini não configurada. Configure o segredo GEMINI_API_KEY no painel de Secrets do AI Studio para processamento multimodal (PDF/Imagens)."
+) : IllegalStateException(message)
+
 object GeminiScheduleParser {
     private const val TAG = "GeminiScheduleParser"
     const val MAX_FILE_SIZE_BYTES: Long = 15 * 1024 * 1024L // 15MB
@@ -132,9 +136,7 @@ object GeminiScheduleParser {
     ): ParsedEscala = withContext(Dispatchers.IO) {
         val apiKey = BuildConfig.GEMINI_API_KEY
         if (apiKey.isBlank()) {
-            throw IllegalStateException(
-                "Chave da API Gemini não configurada. Configure o segredo GEMINI_API_KEY no painel de Secrets do AI Studio para processamento multimodal (PDF/Imagens)."
-            )
+            throw GeminiApiKeyMissingException()
         }
 
         // Verificação defensiva de tamanho do arquivo antes de carregar na memória e codificar em Base64
