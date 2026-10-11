@@ -19,10 +19,10 @@ import java.util.concurrent.TimeoutException
 
 /**
  * Coordenador da Etapa A:
- * Imagem (Base64) -> Chamada IA Gemini -> Parse JSON estruturado -> Geração de CSV no cache interno.
+ * Imagem (ByteArray) -> Chamada IA Gemini -> Parse JSON estruturado -> Geração de CSV no cache interno.
  */
 class ExtratorEscala(
-    private val geminiClient: GeminiClient
+    private val geminiClient: GeminiClient = FirebaseAiLogicGeminiClient()
 ) {
 
     companion object {
@@ -129,16 +129,16 @@ class ExtratorEscala(
     }
 
     /**
-     * Executa a extração completa e grava o CSV no cache interno do app.
+     * Executa a extração completa a partir dos bytes da imagem e grava o CSV no cache interno do app.
      */
     suspend fun extrair(
         context: Context,
-        imagemBase64: String
+        imagemBytes: ByteArray
     ): ResultadoExtracao = withContext(Dispatchers.IO) {
         try {
-            Log.i(TAG, "Iniciando extração via Gemini...")
+            Log.i(TAG, "Iniciando extração via Gemini (${imagemBytes.size} bytes)...")
 
-            val jsonResposta = geminiClient.extrairJsonEscala(imagemBase64)
+            val jsonResposta = geminiClient.extrairJsonEscala(imagemBytes)
             val linhas = parsearJsonParaLinhas(jsonResposta)
 
             if (linhas.isEmpty()) {

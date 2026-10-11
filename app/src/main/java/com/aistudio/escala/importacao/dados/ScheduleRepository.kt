@@ -1,7 +1,5 @@
 package com.aistudio.escala.importacao.dados
 
-import android.util.Log
-
 /**
  * Interface responsável pela Etapa B: gravação determinística das linhas validadas no banco de dados SQLite.
  *
@@ -9,42 +7,38 @@ import android.util.Log
  * Esta interface NUNCA processa ou recebe imagens. Ela opera exclusivamente sobre linhas de dados já validadas e aprovadas.
  */
 interface ScheduleRepository {
+
     /**
-     * Persiste as linhas validadas na base de dados SQLite.
-     * @param linhas Lista de linhas aprovadas na revisão humana sem nenhum erro bloqueante.
-     * @return Quantidade de registros persistidos com sucesso.
+     * Verifica com antecedência se alguma das linhas a importar sobrescreverá uma escalação já existente
+     * para a mesma igreja, data de serviço e posto/função.
+     * Retorna a lista de conflitos onde a pessoa existente for DIFERENTE da nova pessoa proposta.
      */
-    suspend fun salvarEscala(linhas: List<LinhaEscala>): Result<Int>
+    suspend fun verificarConflitosExistentes(linhas: List<LinhaEscala>): List<ConflitoEscala>
+
+    /**
+     * Persiste as linhas validadas na base de dados SQLite (merge / update com transação atômica).
+     * @param linhas Lista de linhas aprovadas na revisão humana sem nenhum erro bloqueante.
+     * @return [Result] contendo o [ResumoGravacao] com contagens reais de inseridos, atualizados e substituídos.
+     */
+    suspend fun salvarEscala(linhas: List<LinhaEscala>): Result<ResumoGravacao>
 }
 
 /**
- * Implementação de exemplo com TODO explícito para conexão com o DatabaseHelper existente.
- * Permite que a camada de importação seja compilada, testada e executada de forma desacoplada.
+ * Implementação padrão de exemplo em memória.
  */
 class ExemploScheduleRepository : ScheduleRepository {
 
-    override suspend fun salvarEscala(linhas: List<LinhaEscala>): Result<Int> {
-        return try {
-            // TODO: Integrar com DatabaseHelper.kt / SQLiteOpenHelper
-            // Exemplo de integração:
-            // val db = databaseHelper.writableDatabase
-            // db.beginTransaction()
-            // try {
-            //     for (linha in linhas) {
-            //         // Inserir igreja se não existir
-            //         // Inserir função/posto se não existir
-            //         // Inserir escala (data, horario, igrejaId, postoId, nome)
-            //     }
-            //     db.setTransactionSuccessful()
-            // } finally {
-            //     db.endTransaction()
-            // }
+    override suspend fun verificarConflitosExistentes(linhas: List<LinhaEscala>): List<ConflitoEscala> {
+        return emptyList()
+    }
 
-            Log.i("ScheduleRepository", "Gravando ${linhas.size} linhas validadas no SQLite...")
-            Result.success(linhas.size)
-        } catch (e: Exception) {
-            Log.e("ScheduleRepository", "Falha ao gravar escala no SQLite", e)
-            Result.failure(e)
-        }
+    override suspend fun salvarEscala(linhas: List<LinhaEscala>): Result<ResumoGravacao> {
+        return Result.success(
+            ResumoGravacao(
+                inseridos = linhas.size,
+                atualizados = 0,
+                substituidos = 0
+            )
+        )
     }
 }

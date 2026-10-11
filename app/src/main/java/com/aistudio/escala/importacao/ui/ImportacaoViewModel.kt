@@ -6,6 +6,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.aistudio.escala.importacao.captura.ImageResizer
 import com.aistudio.escala.importacao.csv.CsvWriter
@@ -17,7 +18,8 @@ import com.aistudio.escala.importacao.dados.ResultadoExtracao
 import com.aistudio.escala.importacao.dados.ScheduleRepository
 import com.aistudio.escala.importacao.dados.TipoErro
 import com.aistudio.escala.importacao.extracao.ExtratorEscala
-import com.aistudio.escala.importacao.extracao.HttpProxyGeminiClient
+import com.aistudio.escala.importacao.extracao.FirebaseAiLogicGeminiClient
+import com.aistudio.escala.importacao.repositorio.SqliteScheduleRepository
 import com.aistudio.escala.importacao.validacao.ValidadorEscala
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,17 +31,19 @@ import java.io.File
 import java.time.LocalDate
 
 /**
- * ViewModel gerenciador de todo o fluxo de importação da escala:
- * 1. Captura e compressão de imagem
- * 2. Extração via IA (Gemini)
- * 3. Geração de CSV intermediário
- * 4. Validação pura e reativa a cada edição humana
- * 5. Exportação de CSV via FileProvider
- * 6. Gravação determinística no SQLite via ScheduleRepository
- * 7. Limpeza rigorosa de arquivos temporários de imagem e CSV (privacidade)
+ * ViewModel gerenciador do fluxo determinístico de importação da escala:
+ * 1. Captura e compressão de imagem (ImageResizer)
+ * 2. Extração via IA com Firebase AI Logic padrão (FirebaseAiLogicGeminiClient)
+ * 3. Geração de CSV intermediário em UTF-8 com BOM
+ * 4. Validação pura com relatório de erros e avisos
+ * 5. Detecção de substituições e avisos de agregação de horário em posto
+ * 6. Edição com estado local debounce/perda de foco na UI
+ * 7. Exportação de CSV via FileProvider
+ * 8. Gravação determinística no SQLite via ScheduleRepository
+ * 9. Limpeza de arquivos residuais no cache (privacidade e segurança)
  */
 class ImportacaoViewModel(
-    private val extratorEscala: ExtratorEscala = ExtratorEscala(HttpProxyGeminiClient()),
+    private val extratorEscala: ExtratorEscala = ExtratorEscala(FirebaseAiLogicGeminiClient()),
     private val validadorEscala: ValidadorEscala = ValidadorEscala(),
     private val scheduleRepository: ScheduleRepository = ExemploScheduleRepository(),
     private val cadastroRepository: CadastroRepository? = null
@@ -56,59 +60,69 @@ class ImportacaoViewModel(
     private var arquivoCsvTemporario: File? = null
 
     /**
-     * Prepara a interface para o escaneamento de documento.
+     * Inicia o fluxo de scanner de documento.
      */
-    fun iniciarScanner() {
+    fun iniciarCaptura() {
         _uiState.value = ImportacaoUiState.Escaneando
     }
 
     /**
-     * Processa a imagem obtida do scanner ou da galeria.
+     * Processa a foto escaneada pelo ML Kit Document Scanner:
+     * 1. Redimensiona preservando proporção (lado maior <= 2048 px) e comprime em JPEG 85.
+     * 2. Envia os bytes ao Gemini (Firebase AI Logic).
+     * 3. Salva o CSV intermediário inicial.
+     * 4. Valida os dados e abre a tela de revisão humana.
      */
     fun processarImagemCapturada(context: Context, imageUri: Uri) {
         viewModelScope.launch {
-            _uiState.value = ImportacaoUiState.Processando("Otimizando e comprimindo imagem...")
+            _uiState.value = ImportacaoUiState.Processando("Otimizando imagem para leitura...")
 
-            try {
-                // Etapa 0: compressão e redimensionamento da imagem (max 2048 px, JPEG 85)
-                val resultadoImagem = ImageResizer.processarEComprimir(context, imageUri)
-                arquivoImagemTemporario = resultadoImagem.tempFile
-
-                _uiState.value = ImportacaoUiState.Processando("Extraindo tabela litúrgica com a inteligência artificial...")
-
-                // Etapa A: chamada Gemini e geração de CSV intermediário no cache
-                val resultadoExtracao = extratorEscala.extrair(context, resultadoImagem.base64)
-
-                when (resultadoExtracao) {
-                    is ResultadoExtracao.Sucesso -> {
-                        arquivoCsvTemporario = File(resultadoExtracao.csvPath)
-                        revalidarLinhasEAtualizarUi(
-                            context = context,
-                            linhas = resultadoExtracao.linhas,
-                            csvPath = resultadoExtracao.csvPath
-                        )
-                    }
-                    is ResultadoExtracao.Erro -> {
-                        val msg = traduzirErro(resultadoExtracao.tipo)
-                        _uiState.value = ImportacaoUiState.Erro(
-                            mensagemAmigavel = msg,
-                            tipo = resultadoExtracao.tipo
-                        )
-                    }
-                }
+            // Redimensionamento e compressão
+            val resultadoProcessamento = try {
+                ImageResizer.processarEComprimir(context, imageUri)
             } catch (e: Exception) {
-                Log.e(TAG, "Falha durante o processamento da imagem", e)
-                val tipo = ExtratorEscala.categorizarErro(e)
+                Log.e(TAG, "Falha ao processar e comprimir imagem", e)
+                null
+            }
+            if (resultadoProcessamento == null) {
                 _uiState.value = ImportacaoUiState.Erro(
-                    mensagemAmigavel = traduzirErro(tipo),
-                    tipo = tipo
+                    "Não foi possível processar a imagem escaneada. Tente novamente.",
+                    TipoErro.IMAGEM_ILEGIVEL
                 )
+                return@launch
+            }
+
+            arquivoImagemTemporario = resultadoProcessamento.tempFile
+
+            _uiState.value = ImportacaoUiState.Processando("Identificando tabelas e escalas litúrgicas com IA...")
+
+            // Extração multimodal estruturada com Firebase AI Logic
+            val resultadoExtracao = extratorEscala.extrair(
+                context = context,
+                imagemBytes = resultadoProcessamento.imageBytes
+            )
+
+            when (resultadoExtracao) {
+                is ResultadoExtracao.Sucesso -> {
+                    val csvFile = File(resultadoExtracao.csvPath)
+                    arquivoCsvTemporario = csvFile
+
+                    _uiState.value = ImportacaoUiState.Processando("Validando dados e identificando regras...")
+                    revalidarLinhasEAtualizarUi(context, resultadoExtracao.linhas, resultadoExtracao.csvPath)
+                }
+                is ResultadoExtracao.Erro -> {
+                    val mensagem = traduzirErro(resultadoExtracao.tipo)
+                    _uiState.value = ImportacaoUiState.Erro(
+                        mensagemAmigavel = mensagem,
+                        tipo = resultadoExtracao.tipo
+                    )
+                }
             }
         }
     }
 
     /**
-     * Revalida a lista de linhas e atualiza o estado de UI.
+     * Revalida a lista de linhas e atualiza o estado com relatório, conflitos e avisos de posto.
      */
     private suspend fun revalidarLinhasEAtualizarUi(
         context: Context,
@@ -133,16 +147,65 @@ class ImportacaoViewModel(
             }
         }
 
+        // Verifica conflitos com escalações já existentes na base de dados
+        val conflitos = try {
+            scheduleRepository.verificarConflitosExistentes(linhas)
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha ao verificar conflitos prévios: ${e.message}")
+            emptyList()
+        }
+
+        // Lista igrejas cadastradas se o repositório for SqliteScheduleRepository
+        val igrejasCadastradas = try {
+            (scheduleRepository as? SqliteScheduleRepository)?.listarIgrejasCadastradas()?.map { it.second }
+                ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+
+        // Gera avisos quando postos embutem horário devido a horários distintos para a mesma função
+        val avisosPostos = gerarAvisosPostoComHorario(linhas)
+
         _uiState.value = ImportacaoUiState.Revisando(
             linhas = linhas,
             relatorio = relatorio,
             csvPath = csvPath,
-            podeImportar = relatorio.podeImportar
+            podeImportar = relatorio.podeImportar,
+            conflitos = conflitos,
+            igrejasCadastradas = igrejasCadastradas,
+            avisosPostoComHorario = avisosPostos
         )
     }
 
+    private fun gerarAvisosPostoComHorario(linhas: List<LinhaEscala>): List<String> {
+        val avisos = mutableListOf<String>()
+        val agrupado = linhas.groupBy {
+            val ref = SqliteScheduleRepository.formatarPeriodoReferencia(it.data)
+            Triple(it.igreja.trim(), ref, it.funcao.trim())
+        }
+
+        for ((chave, grupo) in agrupado) {
+            val (igreja, periodo, funcao) = chave
+            val horarios = grupo.map { it.horario.trim() }.filter { it.isNotBlank() }.distinct()
+            if (horarios.size > 1) {
+                avisos.add("Na igreja '$igreja' ($periodo), a função '$funcao' possui ${horarios.size} horários distintos (${horarios.joinToString(", ")}). Postos específicos com horário serão criados (ex: '$funcao ${horarios.first()}').")
+            }
+        }
+        return avisos
+    }
+
     /**
-     * Edita uma linha existente. Dispara revalidação automática imediata.
+     * Atualiza a lista completa de linhas com a edição consolidada (após foco ou debounce).
+     */
+    fun atualizarTodasLinhas(context: Context, novasLinhas: List<LinhaEscala>) {
+        val estadoAtual = _uiState.value as? ImportacaoUiState.Revisando ?: return
+        viewModelScope.launch {
+            revalidarLinhasEAtualizarUi(context, novasLinhas, estadoAtual.csvPath)
+        }
+    }
+
+    /**
+     * Edita uma linha existente. Dispara revalidação e persistência de CSV.
      */
     fun editarLinha(context: Context, index: Int, novaLinha: LinhaEscala) {
         val estadoAtual = _uiState.value as? ImportacaoUiState.Revisando ?: return
@@ -205,10 +268,12 @@ class ImportacaoViewModel(
 
             val resultado = scheduleRepository.salvarEscala(estadoAtual.linhas)
             if (resultado.isSuccess) {
-                val total = resultado.getOrDefault(estadoAtual.linhas.size)
+                val resumo = resultado.getOrNull() ?: com.aistudio.escala.importacao.dados.ResumoGravacao(
+                    inseridos = estadoAtual.linhas.size
+                )
                 // Privacidade: apaga os arquivos de imagem e CSV temporários após o sucesso
                 limparCacheTemporario()
-                _uiState.value = ImportacaoUiState.Concluido(totalSalvas = total)
+                _uiState.value = ImportacaoUiState.Concluido(resumo = resumo)
             } else {
                 val erroMsg = "Falha ao gravar registros no banco de dados local. Tente novamente."
                 _uiState.value = ImportacaoUiState.Erro(erroMsg, TipoErro.DESCONHECIDO)
@@ -267,5 +332,42 @@ class ImportacaoViewModel(
             TipoErro.IMAGEM_ILEGIVEL -> "A imagem está ilegível ou muito escura para leitura automática. Experimente alinhar e focar bem a tabela antes de capturar."
             TipoErro.DESCONHECIDO -> "Não foi possível importar a escala agora. Verifique a foto e tente novamente."
         }
+    }
+}
+
+/**
+ * Factory padrão para instanciação do [ImportacaoViewModel] com injeção de dependências limpa.
+ *
+ * Como usar no Jetpack Compose:
+ * ```kotlin
+ * val context = LocalContext.current
+ * val viewModel: ImportacaoViewModel = viewModel(
+ *     factory = ImportacaoViewModelFactory(
+ *         extratorEscala = ExtratorEscala(FirebaseAiLogicGeminiClient()),
+ *         validadorEscala = ValidadorEscala(),
+ *         scheduleRepository = SqliteScheduleRepository(context),
+ *         cadastroRepository = SqliteCadastroRepository(context)
+ *     )
+ * )
+ * ```
+ */
+class ImportacaoViewModelFactory(
+    private val extratorEscala: ExtratorEscala = ExtratorEscala(FirebaseAiLogicGeminiClient()),
+    private val validadorEscala: ValidadorEscala = ValidadorEscala(),
+    private val scheduleRepository: ScheduleRepository = ExemploScheduleRepository(),
+    private val cadastroRepository: CadastroRepository? = null
+) : ViewModelProvider.Factory {
+
+    @Suppress("UNCHECKED_CAST")
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(ImportacaoViewModel::class.java)) {
+            return ImportacaoViewModel(
+                extratorEscala = extratorEscala,
+                validadorEscala = validadorEscala,
+                scheduleRepository = scheduleRepository,
+                cadastroRepository = cadastroRepository
+            ) as T
+        }
+        throw IllegalArgumentException("Classe ViewModel desconhecida: ${modelClass.name}")
     }
 }

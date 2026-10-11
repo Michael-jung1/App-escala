@@ -53,3 +53,24 @@ sealed interface ResultadoExtracao {
         val mensagemDetalhada: String = ""
     ) : ResultadoExtracao
 }
+
+/**
+ * Resumo do resultado da gravação determinística no SQLite.
+ */
+data class ResumoGravacao(
+    val inseridos: Int = 0,
+    val atualizados: Int = 0,
+    val substituidos: Int = 0
+) {
+    val totalProcessados: Int get() = inseridos + atualizados + substituidos
+}
+
+/**
+ * Informação sobre conflito/substituição detectado antes da gravação.
+ */
+data class ConflitoEscala(
+    val indexLinha: Int,
+    val linha: LinhaEscala,
+    val pessoaExistente: String,
+    val nomeNovo: String
+)

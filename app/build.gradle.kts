@@ -75,7 +75,9 @@ dependencies {
     implementation(libs.androidx.sqlite)
     implementation(libs.androidx.sqlite.framework)
     implementation(libs.play.services.mlkit.document.scanner)
+    implementation(platform("com.google.firebase:firebase-bom:34.0.0"))
+    implementation("com.google.firebase:firebase-ai")
     testImplementation(libs.junit)
-    testImplementation("org.json:json:20240303")
+    testImplementation("org.json:json:20231013")
     debugImplementation(libs.androidx.ui.tooling)
 }

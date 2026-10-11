@@ -16,10 +16,9 @@ import kotlin.math.max
 
 /**
  * Utilitário para redimensionamento e compressão de imagens escaneadas antes do envio à IA:
- * - Lado maior reduzido para até 2048 px (preservando aspecto)
+ * - Lado maior reduzido para até 2048 px (preservando proporções originais)
  * - Compressão JPEG qualidade 85
- * - Conversão para Base64
- * - Gestão de arquivos temporários no cache interno do app
+ * - Retorno de ByteArray direto e arquivo temporário no cache interno do app
  */
 object ImageResizer {
     private const val TAG = "ImageResizer"
@@ -29,7 +28,7 @@ object ImageResizer {
     /**
      * Processa a imagem apontada por [imageUri]:
      * Reduz dimensões, comprime em JPEG 85, salva arquivo temporário em [context.cacheDir]
-     * e retorna a codificação Base64 e o arquivo gerado.
+     * e retorna os bytes otimizados e o arquivo gerado.
      */
     suspend fun processarEComprimir(
         context: Context,
@@ -94,12 +93,9 @@ object ImageResizer {
             fos.flush()
         }
 
-        // 7. Converte para Base64 (sem quebras de linha para payload limpo)
-        val base64 = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
-
         ProcessamentoImagemResult(
             tempFile = tempFile,
-            base64 = base64,
+            imageBytes = jpegBytes,
             bytes = jpegBytes.size
         )
     }
@@ -121,6 +117,9 @@ object ImageResizer {
 
 data class ProcessamentoImagemResult(
     val tempFile: File,
-    val base64: String,
+    val imageBytes: ByteArray,
     val bytes: Int
-)
+) {
+    val base64: String
+        get() = Base64.encodeToString(imageBytes, Base64.NO_WRAP)
+}

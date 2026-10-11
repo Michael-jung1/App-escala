@@ -1,8 +1,9 @@
 package com.aistudio.escala.importacao.ui
 
+import com.aistudio.escala.importacao.dados.ConflitoEscala
 import com.aistudio.escala.importacao.dados.LinhaEscala
+import com.aistudio.escala.importacao.dados.ResumoGravacao
 import com.aistudio.escala.importacao.dados.TipoErro
-import com.aistudio.escala.importacao.validacao.LinhaValidada
 import com.aistudio.escala.importacao.validacao.RelatorioValidacao
 
 /**
@@ -29,13 +30,16 @@ sealed interface ImportacaoUiState {
     /**
      * Tela principal de revisão humana:
      * Exibe a lista de linhas editáveis, relatório de validação reativo (erros e avisos),
-     * e botões de ação (adicionar, remover, exportar CSV, reescanear, importar).
+     * detecção de substituições e seletor de igreja.
      */
     data class Revisando(
         val linhas: List<LinhaEscala>,
         val relatorio: RelatorioValidacao,
         val csvPath: String,
-        val podeImportar: Boolean
+        val podeImportar: Boolean,
+        val conflitos: List<ConflitoEscala> = emptyList(),
+        val igrejasCadastradas: List<String> = emptyList(),
+        val avisosPostoComHorario: List<String> = emptyList()
     ) : ImportacaoUiState
 
     /**
@@ -45,9 +49,10 @@ sealed interface ImportacaoUiState {
 
     /**
      * Fluxo concluído com sucesso e dados salvos no SQLite.
+     * Exibe o resumo detalhado: inseridos, atualizados e substituídos.
      */
     data class Concluido(
-        val totalSalvas: Int
+        val resumo: ResumoGravacao
     ) : ImportacaoUiState
 
     /**
