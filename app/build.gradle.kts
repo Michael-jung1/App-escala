@@ -74,6 +74,7 @@ dependencies {
     implementation(libs.sqlcipher)
     implementation(libs.androidx.sqlite)
     implementation(libs.androidx.sqlite.framework)
+    implementation(libs.play.services.mlkit.document.scanner)
     testImplementation(libs.junit)
     testImplementation("org.json:json:20240303")
     debugImplementation(libs.androidx.ui.tooling)
