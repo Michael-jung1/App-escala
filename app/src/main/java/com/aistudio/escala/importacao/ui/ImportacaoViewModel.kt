@@ -330,6 +330,7 @@ class ImportacaoViewModel(
             TipoErro.LIMITE_EXCEDIDO -> "Muitas tentativas em pouco tempo. Aguarde alguns minutos antes de tentar novamente."
             TipoErro.RESPOSTA_INVALIDA -> "Não conseguimos estruturar a tabela a partir da foto. Tente tirar uma foto mais nítida, com boa iluminação."
             TipoErro.IMAGEM_ILEGIVEL -> "A imagem está ilegível ou muito escura para leitura automática. Experimente alinhar e focar bem a tabela antes de capturar."
+            TipoErro.SERVICO_OCUPADO -> "O serviço de leitura está ocupado agora. Tente novamente em alguns minutos."
             TipoErro.DESCONHECIDO -> "Não foi possível importar a escala agora. Verifique a foto e tente novamente."
         }
     }

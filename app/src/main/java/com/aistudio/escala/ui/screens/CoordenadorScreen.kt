@@ -112,7 +112,17 @@ import com.aistudio.escala.data.DiaComPostos
 import com.aistudio.escala.data.EscalaRepository
 import com.aistudio.escala.data.Igreja
 import com.aistudio.escala.data.PostoItem
-import com.aistudio.escala.ui.components.ImportarEscalaCard
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
+import androidx.compose.material.icons.filled.DocumentScanner
+import com.aistudio.escala.importacao.dados.ExemploCadastroRepository
+import com.aistudio.escala.importacao.dados.ExemploScheduleRepository
+import com.aistudio.escala.importacao.extracao.ExtratorEscala
+import com.aistudio.escala.importacao.extracao.FirebaseAiLogicGeminiClient
+import com.aistudio.escala.importacao.ui.ImportacaoRevisaoScreen
+import com.aistudio.escala.importacao.ui.ImportacaoViewModel
+import com.aistudio.escala.importacao.ui.ImportacaoViewModelFactory
+import com.aistudio.escala.importacao.validacao.ValidadorEscala
 import com.aistudio.escala.ui.components.pressScale
 import com.aistudio.escala.ui.theme.getErrorColor
 import com.aistudio.escala.ui.theme.getSuccessColor
@@ -219,6 +229,19 @@ fun CoordenadorScreen(
     var lockPasswordInput by rememberSaveable { mutableStateOf("") }
     var lockErrorMessage by remember { mutableStateOf<String?>(null) }
     var isOnline by remember { mutableStateOf(false) }
+
+    // Estado de navegação e ViewModel do novo fluxo de importação com Gemini
+    var mostrandoTelaImportacao by rememberSaveable { mutableStateOf(false) }
+    val importacaoViewModel: ImportacaoViewModel = viewModel(
+        factory = ImportacaoViewModelFactory(
+            extratorEscala = ExtratorEscala(FirebaseAiLogicGeminiClient()),
+            validadorEscala = ValidadorEscala(),
+            scheduleRepository = ExemploScheduleRepository(),
+            cadastroRepository = ExemploCadastroRepository(
+                nomesCadastrados = listOf("Maria", "João", "Pedro", "Ana", "Lucas", "Carlos")
+            )
+        )
+    )
 
     // Rate limit e bloqueio contra força bruta persistido em memória
     var remainingSeconds by remember { mutableStateOf(CoordenadorLockoutManager.getRemainingSeconds()) }
@@ -739,6 +762,20 @@ fun CoordenadorScreen(
             isLoading = isLoggingIn,
             modifier = modifier
         )
+    } else if (mostrandoTelaImportacao) {
+        // Novo Fluxo de Importação com IA Gemini + Scanner + Revisão
+        BackHandler(enabled = true) {
+            mostrandoTelaImportacao = false
+        }
+        ImportacaoRevisaoScreen(
+            viewModel = importacaoViewModel,
+            onVoltar = {
+                mostrandoTelaImportacao = false
+                selectedChurch?.let { loadChurchSchedule(it.id, showPastDays) }
+                onDataUpdated()
+            },
+            modifier = modifier
+        )
     } else {
         // --- COORDINATOR DASHBOARD ---
         val coord = coordinator!!
@@ -1060,25 +1097,63 @@ fun CoordenadorScreen(
                     }
                 }
 
-                // Import Escala Section
+                // Seção de Importação de Escala (Novo Fluxo: Gemini 2.5 Flash + Scanner ML Kit + Revisão Humana)
                 item {
-                    ImportarEscalaCard(
-                        repository = repository,
-                        onImportSuccess = { periodo ->
-                            coroutineScope.launch {
-                                saveSuccessMessage = "Escala de \"$periodo\" importada com sucesso!"
-                                val savedHash = preferencesManager.coordenadorChave ?: ""
-                                val updatedCoord = if (savedHash.isNotBlank()) repository.loginCoordenador(savedHash) else null
-                                if (updatedCoord != null) {
-                                    coordinator = updatedCoord
-                                    selectedChurch = updatedCoord.igrejas.firstOrNull { it.id == selectedChurch?.id }
-                                        ?: updatedCoord.igrejas.firstOrNull()
-                                }
-                                selectedChurch?.let { loadChurchSchedule(it.id, showPastDays) }
-                                onDataUpdated()
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { mostrandoTelaImportacao = true }
+                            .testTag("card_abrir_importacao_escala"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(MaterialTheme.colorScheme.primaryContainer),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.DocumentScanner,
+                                    contentDescription = "Importar Escala",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(24.dp)
+                                )
                             }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Importar Escala por Foto / Documento",
+                                    fontFamily = FontFamily.Serif,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Escanear tabela impressa com IA Gemini e revisar antes de gravar",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
                         }
-                    )
+                    }
                 }
 
                 // Save Success Banner

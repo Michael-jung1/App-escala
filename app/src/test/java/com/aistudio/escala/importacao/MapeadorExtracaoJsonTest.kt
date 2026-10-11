@@ -122,5 +122,11 @@ class MapeadorExtracaoJsonTest {
             com.aistudio.escala.importacao.dados.TipoErro.LIMITE_EXCEDIDO,
             ExtratorEscala.categorizarErro(errQuota)
         )
+
+        val err503 = java.io.IOException("503 Service Unavailable: High demand")
+        assertEquals(
+            com.aistudio.escala.importacao.dados.TipoErro.SERVICO_OCUPADO,
+            ExtratorEscala.categorizarErro(err503)
+        )
     }
 }

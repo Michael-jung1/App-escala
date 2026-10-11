@@ -37,6 +37,8 @@ class ExemploCadastroRepository(
     private val nomesMock: Set<String> = emptySet()
 ) : CadastroRepository {
 
+    constructor(nomesCadastrados: Collection<String>) : this(nomesCadastrados.toSet())
+
     override suspend fun obterNomesCadastrados(): Set<String> {
         // TODO: Integrar com a tabela de coroinhas/acólitos do DatabaseHelper.kt se existir,
         // ex: "SELECT nome FROM acolitos"

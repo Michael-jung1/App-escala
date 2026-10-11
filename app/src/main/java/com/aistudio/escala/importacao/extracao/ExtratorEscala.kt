@@ -22,11 +22,31 @@ import java.util.concurrent.TimeoutException
  * Imagem (ByteArray) -> Chamada IA Gemini -> Parse JSON estruturado -> Geração de CSV no cache interno.
  */
 class ExtratorEscala(
-    private val geminiClient: GeminiClient = FirebaseAiLogicGeminiClient()
+    private val geminiClient: GeminiClient = FirebaseAiLogicGeminiClient(),
+    private val delayProvider: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) }
 ) {
 
     companion object {
         private const val TAG = "ExtratorEscala"
+
+        /**
+         * Verifica se o erro é transitório de sobrecarga/indisponibilidade (503 / UNAVAILABLE / high demand / overloaded).
+         */
+        fun isErroServicoOcupado(e: Throwable): Boolean {
+            var current: Throwable? = e
+            while (current != null) {
+                val msg = current.message?.lowercase() ?: ""
+                if (msg.contains("503") ||
+                    msg.contains("unavailable") ||
+                    msg.contains("high demand") ||
+                    msg.contains("overloaded")
+                ) {
+                    return true
+                }
+                current = current.cause
+            }
+            return false
+        }
 
         /**
          * Converte o texto JSON retornado pela IA para a lista tipada de [LinhaEscala].
@@ -105,6 +125,10 @@ class ExtratorEscala(
                     return TipoErro.TIMEOUT
                 }
 
+                if (isErroServicoOcupado(current)) {
+                    return TipoErro.SERVICO_OCUPADO
+                }
+
                 if (msg.contains("429") ||
                     msg.contains("quota") ||
                     msg.contains("resource_exhausted") ||
@@ -130,15 +154,38 @@ class ExtratorEscala(
 
     /**
      * Executa a extração completa a partir dos bytes da imagem e grava o CSV no cache interno do app.
+     * Implementa retry com backoff (esperas de 2s e 4s) para falhas transitórias de 503/UNAVAILABLE.
      */
     suspend fun extrair(
         context: Context,
         imagemBytes: ByteArray
     ): ResultadoExtracao = withContext(Dispatchers.IO) {
-        try {
-            Log.i(TAG, "Iniciando extração via Gemini (${imagemBytes.size} bytes)...")
+        val delays = listOf(2000L, 4000L)
+        var tentativasRestantes = 2
+        var tentativaAtual = 0
+        var jsonResposta: String? = null
 
-            val jsonResposta = geminiClient.extrairJsonEscala(imagemBytes)
+        try {
+            while (jsonResposta == null) {
+                try {
+                    Log.i(TAG, "Iniciando chamada Gemini (${imagemBytes.size} bytes) - tentativa ${tentativaAtual + 1}...")
+                    jsonResposta = geminiClient.extrairJsonEscala(imagemBytes)
+                } catch (e: Exception) {
+                    if (isErroServicoOcupado(e) && tentativasRestantes > 0) {
+                        val tempoEspera = delays.getOrElse(tentativaAtual) { 4000L }
+                        Log.w(
+                            TAG,
+                            "Serviço de IA ocupado (503/UNAVAILABLE). Tentando novamente em ${tempoEspera}ms (tentativas restantes: $tentativasRestantes)..."
+                        )
+                        tentativaAtual++
+                        tentativasRestantes--
+                        delayProvider(tempoEspera)
+                    } else {
+                        throw e
+                    }
+                }
+            }
+
             val linhas = parsearJsonParaLinhas(jsonResposta)
 
             if (linhas.isEmpty()) {
