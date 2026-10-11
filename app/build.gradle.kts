@@ -77,6 +77,8 @@ dependencies {
     implementation(libs.play.services.mlkit.document.scanner)
     implementation(platform("com.google.firebase:firebase-bom:34.0.0"))
     implementation("com.google.firebase:firebase-ai")
+    releaseImplementation("com.google.firebase:firebase-appcheck-playintegrity")
+    debugImplementation("com.google.firebase:firebase-appcheck-debug")
     testImplementation(libs.junit)
     testImplementation("org.json:json:20231013")
     debugImplementation(libs.androidx.ui.tooling)
