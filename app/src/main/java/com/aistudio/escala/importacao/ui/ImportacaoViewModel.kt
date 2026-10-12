@@ -327,10 +327,13 @@ class ImportacaoViewModel(
         return when (tipo) {
             TipoErro.SEM_INTERNET -> "Sem conexão com a internet. Verifique sua rede e tente novamente."
             TipoErro.TIMEOUT -> "A conexão com o serviço de inteligência artificial demorou demais para responder. Tente novamente em instantes."
-            TipoErro.LIMITE_EXCEDIDO -> "Muitas tentativas em pouco tempo. Aguarde alguns minutos antes de tentar novamente."
+            TipoErro.LIMITE_EXCEDIDO -> "Muitas tentativas em pouco tempo ou cota excedida. Aguarde alguns minutos antes de tentar novamente."
             TipoErro.RESPOSTA_INVALIDA -> "Não conseguimos estruturar a tabela a partir da foto. Tente tirar uma foto mais nítida, com boa iluminação."
             TipoErro.IMAGEM_ILEGIVEL -> "A imagem está ilegível ou muito escura para leitura automática. Experimente alinhar e focar bem a tabela antes de capturar."
             TipoErro.SERVICO_OCUPADO -> "O serviço de leitura está ocupado agora. Tente novamente em alguns minutos."
+            TipoErro.PERMISSAO_NEGADA -> "Acesso não autorizado ao serviço de IA. Verifique as permissões de acesso do projeto."
+            TipoErro.API_NAO_HABILITADA -> "A API do serviço de IA ainda não está ativada no projeto. Contate o administrador para ativá-la no console."
+            TipoErro.APP_CHECK_FALHOU -> "Falha na verificação de integridade do Firebase App Check. O dispositivo não pôde ser atestado."
             TipoErro.DESCONHECIDO -> "Não foi possível importar a escala agora. Verifique a foto e tente novamente."
         }
     }

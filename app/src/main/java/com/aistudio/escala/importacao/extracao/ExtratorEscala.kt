@@ -1,6 +1,8 @@
 package com.aistudio.escala.importacao.extracao
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.util.Log
 import com.aistudio.escala.importacao.csv.CsvWriter
 import com.aistudio.escala.importacao.dados.Confianca
@@ -13,6 +15,7 @@ import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeoutException
@@ -103,20 +106,42 @@ class ExtratorEscala(
         }
 
         /**
-         * Mapeia qualquer exceção para o tipo de erro amigável correspondente.
+         * Verifica se o dispositivo está comprovadamente sem conexão ativa com a internet.
          */
-        fun categorizarErro(e: Throwable): TipoErro {
+        fun isDispositivoSemConexao(context: Context?): Boolean {
+            if (context == null) return false
+            return try {
+                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
+                val redeAtiva = cm.activeNetwork ?: return true
+                val caps = cm.getNetworkCapabilities(redeAtiva) ?: return true
+                !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            } catch (_: Throwable) {
+                false
+            }
+        }
+
+        /**
+         * Mapeia qualquer exceção para o tipo de erro amigável correspondente.
+         * NÃO classifica como SEM_INTERNET por palavras soltas em mensagens genéricas:
+         * usa SEM_INTERNET exclusivamente para UnknownHostException, ConnectException
+         * ou quando o ConnectivityManager do dispositivo atesta ausência de rede.
+         */
+        fun categorizarErro(e: Throwable, context: Context? = null): TipoErro {
+            if (isDispositivoSemConexao(context)) {
+                return TipoErro.SEM_INTERNET
+            }
+
             var current: Throwable? = e
             while (current != null) {
+                val className = current::class.java.name
                 val msg = current.message?.lowercase() ?: ""
 
-                if (current is UnknownHostException ||
-                    msg.contains("unable to resolve host") ||
-                    msg.contains("no address associated with hostname")
-                ) {
+                // Sem internet: apenas exceções explícitas de resolução ou conexão de rede
+                if (current is UnknownHostException || current is ConnectException) {
                     return TipoErro.SEM_INTERNET
                 }
 
+                // Timeout
                 if (current is SocketTimeoutException ||
                     current is TimeoutException ||
                     msg.contains("timeout") ||
@@ -125,10 +150,33 @@ class ExtratorEscala(
                     return TipoErro.TIMEOUT
                 }
 
+                // Sobrecarga / 503 transitório
                 if (isErroServicoOcupado(current)) {
                     return TipoErro.SERVICO_OCUPADO
                 }
 
+                // Firebase App Check
+                if (className.contains("AppCheck", ignoreCase = true) ||
+                    msg.contains("app check") ||
+                    msg.contains("appcheck") ||
+                    msg.contains("app-check") ||
+                    msg.contains("firebaseappcheck") ||
+                    msg.contains("attestation failed")
+                ) {
+                    return TipoErro.APP_CHECK_FALHOU
+                }
+
+                // API não habilitada no console do Firebase / Google Cloud
+                if (msg.contains("api is not enabled") ||
+                    msg.contains("has not been used in project") ||
+                    msg.contains("service_disabled") ||
+                    msg.contains("enable the api") ||
+                    msg.contains("apinotenabled")
+                ) {
+                    return TipoErro.API_NAO_HABILITADA
+                }
+
+                // Limite / Cota excedida
                 if (msg.contains("429") ||
                     msg.contains("quota") ||
                     msg.contains("resource_exhausted") ||
@@ -137,10 +185,23 @@ class ExtratorEscala(
                     return TipoErro.LIMITE_EXCEDIDO
                 }
 
+                // Permissão negada / Não autorizado
+                if (msg.contains("permission_denied") ||
+                    msg.contains("permission denied") ||
+                    msg.contains("forbidden") ||
+                    msg.contains("403") ||
+                    msg.contains("unauthorized") ||
+                    msg.contains("insufficient permissions")
+                ) {
+                    return TipoErro.PERMISSAO_NEGADA
+                }
+
+                // Imagem ilegível
                 if (msg.contains("ilegível") || msg.contains("ilegivel") || msg.contains("imagem não reconhecida")) {
                     return TipoErro.IMAGEM_ILEGIVEL
                 }
 
+                // Resposta inválida / JSON corrompido
                 if (current is JSONException || msg.contains("json") || msg.contains("resposta vazia")) {
                     return TipoErro.RESPOSTA_INVALIDA
                 }
@@ -212,8 +273,19 @@ class ExtratorEscala(
                 csvPath = csvFile.absolutePath
             )
         } catch (e: Exception) {
-            val tipoErro = categorizarErro(e)
-            Log.e(TAG, "Falha na extração de escala: ${tipoErro.name} (${e.javaClass.simpleName})", e)
+            // Registra no Logcat toda a cadeia de causas da exceção sem vazar dados pessoais ou imagens
+            var cur: Throwable? = e
+            var profundidade = 0
+            while (cur != null) {
+                Log.e(
+                    TAG,
+                    "Falha na extração de escala [causa nível $profundidade]: ${cur::class.java.name}: ${cur.message ?: "(sem mensagem)"}"
+                )
+                cur = cur.cause
+                profundidade++
+            }
+
+            val tipoErro = categorizarErro(e, context)
             ResultadoExtracao.Erro(
                 tipo = tipoErro,
                 mensagemDetalhada = e.message ?: ""

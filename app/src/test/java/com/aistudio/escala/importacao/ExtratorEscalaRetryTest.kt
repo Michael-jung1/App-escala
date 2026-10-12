@@ -30,6 +30,35 @@ class ExtratorEscalaRetryTest {
     }
 
     @Test
+    fun testCategorizarErro_semInternet_precisaoDeExcecao() {
+        // UnknownHostException e ConnectException devem ser categorizadas como SEM_INTERNET
+        val erroHost = java.net.UnknownHostException("firebase.googleapis.com")
+        assertEquals(TipoErro.SEM_INTERNET, ExtratorEscala.categorizarErro(erroHost))
+
+        val erroConnect = java.net.ConnectException("Failed to connect to /142.250.190.42:443")
+        assertEquals(TipoErro.SEM_INTERNET, ExtratorEscala.categorizarErro(erroConnect))
+
+        // Exceção genérica contendo palavras de rede na mensagem NÃO deve ser categorizada como SEM_INTERNET
+        val erroGenerico = RuntimeException("Unable to resolve host or connect to custom service")
+        assertEquals(TipoErro.DESCONHECIDO, ExtratorEscala.categorizarErro(erroGenerico))
+    }
+
+    @Test
+    fun testCategorizarErro_errosFirebaseAI_especificos() {
+        val erroAppCheck = RuntimeException("FirebaseAppCheck: Device attestation failed: 403")
+        assertEquals(TipoErro.APP_CHECK_FALHOU, ExtratorEscala.categorizarErro(erroAppCheck))
+
+        val erroApiDesabilitada = RuntimeException("Generative Language API has not been used in project or it is not enabled.")
+        assertEquals(TipoErro.API_NAO_HABILITADA, ExtratorEscala.categorizarErro(erroApiDesabilitada))
+
+        val erroPermissao = RuntimeException("403 Forbidden: PERMISSION_DENIED for caller")
+        assertEquals(TipoErro.PERMISSAO_NEGADA, ExtratorEscala.categorizarErro(erroPermissao))
+
+        val erroQuota = RuntimeException("429 RESOURCE_EXHAUSTED: quota limit exceeded")
+        assertEquals(TipoErro.LIMITE_EXCEDIDO, ExtratorEscala.categorizarErro(erroQuota))
+    }
+
+    @Test
     fun testExtrair_retentaComDelaysCorretos_quandoErroTransitorio() {
         runBlocking {
             var chamadas = 0
